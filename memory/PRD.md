@@ -17,15 +17,23 @@ Internal web application for Gems & Luxury (gemsandluxury.com), an African luxur
 ## Implemented (2026-04-29)
 - JWT email/password auth with bcrypt, role-based dependencies (admin / manager / worker)
 - Admin user CRUD (create, list, patch)
-- Attendance flow: punch in/out, break start/end, heartbeat, auto punch-out sweep logic, idle warning in worker UI
+- Attendance flow: punch in/out, break start/end, heartbeat, idle warning in worker UI
 - AI product generation (Claude Sonnet 4.5) — returns name / short title / short+full description / tags / sizes / final_price (clamped to admin-configured band) + pricing_meta (admin-only)
 - Pricing engine: silent background analysis, pricing_meta stripped from all worker responses
-- Image library: upload to Emergent object storage, tagging, status lifecycle (available/assigned/skipped/needs_review/archived), query-param-auth download for `<img src>`
+- Image library: upload to Emergent object storage, tagging, status lifecycle, query-param-auth download
 - Gemini Nano Banana: enhance image + generate 2 alternate-view variations
-- Admin dashboard: KPIs (punched in / on break / idle / products today / products 7d / images / total), live worker list, recent products, activity feed
-- Naming families CRUD (enable/disable, edit words), Pricing rules, Categories, Settings (idle timeout, warning seconds, break policy, feature toggles), Attendance admin (force punch-out), Activity logs
-- Seed: admin + worker accounts, 9 naming families, 6 categories, default pricing rule ($40–$150), default settings
-- Tests: 34/34 backend pytest cases passed; frontend end-to-end validated via testing agent
+- Admin dashboard: KPIs, live workers, recent products, activity feed
+- Naming families CRUD, Pricing rules, Categories, Settings, Attendance admin (force punch-out), Activity logs
+- Tests: 34/34 backend + frontend e2e
+
+## Iteration 2 (2026-04-29)
+- **APScheduler** wired — auto-punch-out sweep ticks every 2 minutes (uses admin `idle_timeout_minutes`)
+- **CMS export payload**: `GET /api/products/{id}/cms-payload` returns Shopify-shaped JSON (handle, body_html, vendor, variants[size→sku], images[urls], metafields[ai.*])
+- **Admin pricing_meta override**: `ProductDetailDialog` from `/admin/products` allows editing `final_price` + `pricing_meta` (perceived quality, complexity, occasion tier, uplift, reasoning); `Copy CMS JSON` button. Worker PATCH silently strips `pricing_meta`.
+- **Image variation browser**: `GET /api/admin/images/{id}/variations` + `ImageVariationsDialog` shows source + enhanced + alternates side-by-side with inline Enhance / Generate alternates buttons
+- **Bulk image upload**: `POST /api/admin/images/upload-bulk` accepts multiple files in one request; admin UI uses `<input multiple>` so files can be selected at once with shared tags/category
+- **Production-readiness**: deployment_agent **PASS**; fixed N+1 query in `dashboard_stats` and `live_users` (batched with `$in`)
+- Tests: 10/10 new tests passed (iteration_2)
 
 ## Seed credentials
 - Admin: `admin@gemsandluxury.com` / `Admin@123`
@@ -33,17 +41,15 @@ Internal web application for Gems & Luxury (gemsandluxury.com), an African luxur
 
 ## Backlog
 ### P1
-- Background scheduler to periodically run `auto_punch_out_sweep()` (currently logic only)
-- CMS export payload endpoint (JSON blob ready for headless CMS / Shopify)
-- Admin override UI for generated product pricing_meta
-- Image variation browser UI (admin can view enhanced + alternates side-by-side with source)
+- Prompt template editor UI (AI prompts as configurable records)
+- Duplicate-name detection with fuzzy search before generation finalizes
+- Weekly timesheet PDF export
+- "Publish to Shopify" one-click direct push using `cms-payload`
 
 ### P2
-- Prompt template editor UI (AI prompts as configurable records)
-- Duplicate name detection with fuzzy search before finalizing generation
-- Weekly timesheet PDF export
-- Manager read-only permission fine-tuning
-- Structured error alerts / email digests for admins
+- Manager read-only permission fine-tuning per page
+- Email/Slack digests for admin alerts (idle, exports, errors)
+- Audit-trail diff view per product
 
 ## Risks / assumptions
 - AI calls are real (~10–15s Claude, ~15–30s Nano Banana) — add UI loading skeletons for long generations.
