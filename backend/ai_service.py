@@ -2,6 +2,9 @@
 
 Prompts are read from MongoDB collection `prompt_templates` (seeded on startup).
 Includes fuzzy duplicate-name detection with retry.
+
+NOTE: Emergent LLM integration disabled - emergentintegrations package not available.
+AI functionality using Emergent services will return errors.
 """
 import os
 import json
@@ -12,7 +15,8 @@ import re
 import uuid
 from typing import Optional, Any
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+# from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+# Emergent integration disabled - package not available on public PyPI
 from rapidfuzz import fuzz
 
 logger = logging.getLogger(__name__)
@@ -31,6 +35,16 @@ def _api_key() -> str:
     if not key:
         raise RuntimeError("EMERGENT_LLM_KEY not set")
     return key
+
+
+def _emergent_available() -> bool:
+    """Check if Emergent LLM integration is available."""
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+        return True
+    except ImportError:
+        logger.warning("Emergent LLM integration not available - AI features disabled")
+        return False
 
 
 def _extract_json(text: str) -> dict:
