@@ -1030,20 +1030,18 @@ async def admin_reset_password(user_id: str, body: AdminResetPasswordIn, user: d
     return {"ok": True}
 
 
-# ---------- Reports / PDF ----------
+# ---------- Reports / Timesheet Data ----------
 @api.get("/admin/reports/timesheet")
-async def timesheet_pdf(
+async def timesheet_data(
     user: dict = Depends(require_role("admin", "manager")),
     days: int = Query(7, ge=1, le=90),
     user_id: Optional[str] = Query(None),
 ):
-    """Generate a PDF timesheet for the last N days, optionally for a single user."""
-    from io import BytesIO
-    from reportlab.lib.pagesizes import LETTER
-    from reportlab.lib import colors
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-    from reportlab.lib.units import inch
+    """Get timesheet data for the last N days, optionally for a single user.
+    
+    PDF generation is now handled client-side. This endpoint returns JSON data
+    that the frontend can use to generate PDFs using jspdf or similar.
+    """
     from collections import defaultdict
 
     end = now_utc()
@@ -1077,83 +1075,48 @@ async def timesheet_pdf(
         total_p = await db.generated_products.count_documents({"generated_by_user_id": uid, "generated_at": {"$gte": iso(start)}})
         a["products"] = total_p
 
-    buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=LETTER, leftMargin=36, rightMargin=36, topMargin=48, bottomMargin=36)
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("title", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=20, textColor=colors.HexColor("#0c140f"))
-    sub_style = ParagraphStyle("sub", parent=styles["Normal"], fontName="Helvetica", fontSize=10, textColor=colors.HexColor("#6b7d72"))
-    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=13, textColor=colors.HexColor("#0c140f"), spaceAfter=8)
+    # Convert sets to lists for JSON serialization
+    agg_serializable = {}
+    for uid, a in agg.items():
+        agg_serializable[uid] = {
+            "name": a["name"],
+            "minutes": a["minutes"],
+            "breaks": a["breaks"],
+            "products": a["products"],
+            "days": list(a["days"]),
+        }
 
-    flow = []
-    flow.append(Paragraph("Gems &amp; Luxury — Timesheet", title_style))
-    flow.append(Paragraph(f"{start.strftime('%Y-%m-%d')} → {end.strftime('%Y-%m-%d')} · {days} day window · generated {end.strftime('%Y-%m-%d %H:%M UTC')}", sub_style))
-    flow.append(Spacer(1, 16))
-
-    # Aggregated totals table
-    flow.append(Paragraph("Summary by worker", h2))
-    agg_data = [["Worker", "Days worked", "Total hours", "Break minutes", "Products"]]
-    for uid, a in sorted(agg.items(), key=lambda x: -x[1]["minutes"]):
-        hours = f"{a['minutes'] // 60}h {a['minutes'] % 60:02d}m"
-        agg_data.append([a["name"] or uid[:8], str(len(a["days"])), hours, str(a["breaks"]), str(a["products"])])
-    if len(agg_data) == 1:
-        agg_data.append(["No data", "—", "—", "—", "—"])
-    t = Table(agg_data, colWidths=[1.8 * inch, 0.9 * inch, 1.1 * inch, 1.1 * inch, 0.9 * inch])
-    t.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0c140f")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#D4AF37")),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, 0), 9),
-        ("FONTSIZE", (0, 1), (-1, -1), 9),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f7f5")]),
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#21362A")),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-    ]))
-    flow.append(t)
-    flow.append(Spacer(1, 18))
-
-    # Per-day detail
-    flow.append(Paragraph("Daily detail", h2))
-    detail = [["Worker", "Date", "Punch in", "Punch out", "Hours", "Break", "Products", "Status"]]
+    # Build per-day detail with product counts
+    detail = []
     for r in rows:
         pin = datetime.fromisoformat(r["punch_in"])
         pout = datetime.fromisoformat(r["punch_out"]) if r.get("punch_out") else None
         mins = r.get("total_minutes") or (int((now_utc() - pin).total_seconds() // 60) if not pout else 0)
         hours = f"{mins // 60}h {mins % 60:02d}m"
-        detail.append([
-            r["user_name"], pin.strftime("%Y-%m-%d"),
-            pin.strftime("%H:%M"), pout.strftime("%H:%M") if pout else "open",
-            hours, f"{r.get('break_minutes', 0)}m",
-            str(pcount.get((r["user_id"], r["punch_in"][:10]), 0)),
-            "auto" if r.get("auto_punched_out") else ("open" if not pout else "closed"),
-        ])
-    if len(detail) == 1:
-        detail.append(["No attendance in window", "—", "—", "—", "—", "—", "—", "—"])
-    t2 = Table(detail, colWidths=[1.4 * inch, 0.85 * inch, 0.7 * inch, 0.7 * inch, 0.75 * inch, 0.55 * inch, 0.65 * inch, 0.6 * inch])
-    t2.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0c140f")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#D4AF37")),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f7f5")]),
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#21362A")),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ]))
-    flow.append(t2)
-    flow.append(Spacer(1, 12))
-    flow.append(Paragraph("Generated by Gems &amp; Luxury Internal Studio.", sub_style))
+        detail.append({
+            "user_name": r["user_name"],
+            "date": pin.strftime("%Y-%m-%d"),
+            "punch_in": pin.strftime("%H:%M"),
+            "punch_out": pout.strftime("%H:%M") if pout else "open",
+            "hours": hours,
+            "break_minutes": r.get("break_minutes", 0),
+            "products": pcount.get((r["user_id"], r["punch_in"][:10]), 0),
+            "status": "auto" if r.get("auto_punched_out") else ("open" if not pout else "closed"),
+        })
 
-    doc.build(flow)
-    buf.seek(0)
-    pdf = buf.read()
-    await log_activity(user["id"], "timesheet_exported", {"days": days, "user_id": user_id, "rows": len(rows)})
-    fname = f"timesheet_{end.strftime('%Y%m%d')}_{days}d.pdf"
-    return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+    await log_activity(user["id"], "timesheet_data_exported", {"days": days, "user_id": user_id, "rows": len(rows)})
+    
+    return {
+        "title": "Gems & Luxury — Timesheet",
+        "date_range": {
+            "start": iso(start),
+            "end": iso(end),
+            "days": days,
+        },
+        "generated_at": iso(end),
+        "summary_by_worker": agg_serializable,
+        "daily_detail": detail,
+    }
 
 
 # ---------- Seed ----------
@@ -1258,12 +1221,12 @@ _scheduler: AsyncIOScheduler | None = None
 @app.on_event("startup")
 async def on_start():
     global _scheduler
-    try:
-        storage.init_storage()
-        logger.info("storage ready")
-    except Exception as e:
-        logger.warning("storage init failed: %s", e)
+    # Storage initialization is now done in worker.py with R2 bucket binding
+    # storage.init_storage() is called with the bucket from env
     await seed()
+    # Note: APScheduler is disabled for Cloudflare Workers
+    # Scheduled tasks are handled by Cloudflare Cron Triggers in scheduled_worker.py
+    # The scheduler code is kept for local development with uvicorn
     try:
         _scheduler = AsyncIOScheduler(timezone="UTC")
         _scheduler.add_job(auto_punch_out_sweep, "interval", minutes=2, id="auto_punch_out", coalesce=True, max_instances=1)

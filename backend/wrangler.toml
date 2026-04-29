@@ -1,0 +1,21 @@
+name = "gems-luxury-backend"
+main = "server.py"
+compatibility_date = "2024-01-01"
+
+# Note: Cloudflare Workers Python runtime is in beta
+# For production, consider using Cloudflare Run (container-based) or keep on current hosting
+# This configuration is for Workers deployment with Python runtime
+
+[vars]
+ENVIRONMENT = "production"
+APP_NAME = "gemsluxury"
+
+# R2 Bucket Binding for object storage
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "gems-luxury-storage"
+# Note: Create this bucket in Cloudflare dashboard first
+
+# Scheduled tasks (Cron Triggers)
+# Note: For Workers, scheduled tasks need to be in a separate Worker
+# See scheduled_worker.py for the cron-triggered auto punch-out sweep
