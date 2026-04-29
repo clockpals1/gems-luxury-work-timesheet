@@ -4,17 +4,54 @@ import { AdminLayout } from "../components/Layout";
 import { Card, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { toast } from "sonner";
+import { FileDown } from "lucide-react";
 
 export default function AdminAttendance() {
   const [rows, setRows] = useState([]);
+  const [days, setDays] = useState("7");
+  const [downloading, setDownloading] = useState(false);
+
   const load = async () => { const r = await api.get("/admin/attendance"); setRows(r.data); };
   useEffect(() => { load(); }, []);
-  const forceOut = async (id) => { try { await api.post(`/admin/attendance/${id}/force-punch-out`); toast.success("Force punched out"); load(); } catch { toast.error("Failed"); } };
+
+  const forceOut = async (id) => {
+    try { await api.post(`/admin/attendance/${id}/force-punch-out`); toast.success("Force punched out"); load(); }
+    catch { toast.error("Failed"); }
+  };
+
+  const downloadPdf = async () => {
+    setDownloading(true);
+    try {
+      const r = await api.get(`/admin/reports/timesheet?days=${days}`, { responseType: "blob" });
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `timesheet_${new Date().toISOString().slice(0,10)}_${days}d.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Timesheet downloaded");
+    } catch (err) { toast.error("Download failed"); }
+    finally { setDownloading(false); }
+  };
 
   return (
     <AdminLayout>
-      <div className="mb-6"><div className="label-overline text-[#D4AF37]">Work</div><h1 className="font-display text-4xl mt-2">Attendance</h1></div>
+      <div className="flex items-end justify-between mb-6">
+        <div><div className="label-overline text-[#D4AF37]">Work</div><h1 className="font-display text-4xl mt-2">Attendance</h1></div>
+        <div className="flex items-center gap-2">
+          <Select value={days} onValueChange={setDays}>
+            <SelectTrigger className="bg-[#132018] border-[#21362A] w-36 h-9" data-testid="ts-days"><SelectValue/></SelectTrigger>
+            <SelectContent className="bg-[#0C140F] border-[#21362A] text-white">
+              {["7","14","30","60","90"].map((d) => <SelectItem key={d} value={d}>{`Last ${d} days`}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button onClick={downloadPdf} disabled={downloading} className="bg-[#D4AF37] hover:bg-[#F0C84A] text-[#050A07]" data-testid="download-timesheet-btn">
+            <FileDown className="w-4 h-4 mr-2"/>{downloading ? "Generating…" : "Download PDF"}
+          </Button>
+        </div>
+      </div>
       <Card className="bg-[#0C140F] border-[#21362A] rounded-sm">
         <CardContent className="p-0">
           <table className="w-full text-sm" data-testid="attendance-table">

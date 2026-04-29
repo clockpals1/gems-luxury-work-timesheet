@@ -15,6 +15,7 @@ import AdminImages from "./pages/AdminImages";
 import AdminAttendance from "./pages/AdminAttendance";
 import AdminActivityLogs from "./pages/AdminActivityLogs";
 import AdminSettings from "./pages/AdminSettings";
+import AdminPrompts from "./pages/AdminPrompts";
 
 function Protected({ roles, children }) {
   const { user, loading } = useAuth();
@@ -38,6 +39,7 @@ function Router() {
       <Route path="/admin/images" element={<Protected roles={["admin","manager"]}><AdminImages /></Protected>} />
       <Route path="/admin/attendance" element={<Protected roles={["admin","manager"]}><AdminAttendance /></Protected>} />
       <Route path="/admin/activity" element={<Protected roles={["admin","manager"]}><AdminActivityLogs /></Protected>} />
+      <Route path="/admin/prompts" element={<Protected roles={["admin","manager"]}><AdminPrompts /></Protected>} />
       <Route path="/admin/settings" element={<Protected roles={["admin"]}><AdminSettings /></Protected>} />
       <Route path="/" element={<Navigate to={user ? (user.role === "worker" ? "/worker" : "/admin") : "/login"} replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />

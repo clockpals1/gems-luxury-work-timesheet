@@ -191,6 +191,36 @@ class SettingsIn(BaseModel):
     features: Optional[dict[str, bool]] = None
 
 
+class PromptTemplateIn(BaseModel):
+    key: str
+    name: str
+    description: Optional[str] = ""
+    model_provider: str = "anthropic"
+    model_name: str = "claude-sonnet-4-5-20250929"
+    system_prompt: str
+    user_prompt_template: str
+    enabled: bool = True
+
+
+class PromptTemplatePatch(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    model_provider: Optional[str] = None
+    model_name: Optional[str] = None
+    system_prompt: Optional[str] = None
+    user_prompt_template: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+
+
+class AdminResetPasswordIn(BaseModel):
+    new_password: str = Field(min_length=8)
+
+
 # ---------- Auth ----------
 @api.post("/auth/login")
 async def login(body: LoginIn):
@@ -446,6 +476,7 @@ async def generate_product(body: GenerateProductIn, user: dict = Depends(get_cur
 
     try:
         draft = await ai_service.generate_product_draft(
+            db=db,
             category=category,
             naming_families=naming_families,
             pricing_rules=pricing,
@@ -826,7 +857,7 @@ async def enhance_image_ep(image_id: str, user: dict = Depends(require_role("adm
     if not asset:
         raise HTTPException(404, "Not found")
     data, _ = storage.get_object(asset["storage_path"])
-    result = await ai_service.enhance_image(data)
+    result = await ai_service.enhance_image(db, data)
     if not result:
         raise HTTPException(500, "Enhance failed")
     path = storage.build_path(user["id"], f"enhanced-{asset['filename'] or 'x.png'}", kind="variations")
@@ -848,7 +879,7 @@ async def generate_alternates(image_id: str, user: dict = Depends(require_role("
     data, _ = storage.get_object(asset["storage_path"])
     results = []
     for view in ["three-quarter angle", "back view"]:
-        out = await ai_service.generate_alternate_view(data, view)
+        out = await ai_service.generate_alternate_view(db, data, view)
         if not out:
             continue
         path = storage.build_path(user["id"], f"alt-{view.replace(' ', '-')}.png", kind="variations")
@@ -941,6 +972,190 @@ async def activity_logs(user: dict = Depends(require_role("admin", "manager")), 
     return await db.activity_logs.find({}, {"_id": 0}).sort("timestamp", -1).to_list(limit)
 
 
+# ---------- Prompt templates ----------
+@api.get("/admin/prompts")
+async def list_prompts(user: dict = Depends(require_role("admin", "manager"))):
+    return await db.prompt_templates.find({}, {"_id": 0}).sort("key", 1).to_list(100)
+
+
+@api.post("/admin/prompts")
+async def create_prompt(body: PromptTemplateIn, user: dict = Depends(require_role("admin"))):
+    if await db.prompt_templates.find_one({"key": body.key}):
+        raise HTTPException(400, "Prompt key already exists")
+    doc = {"id": new_id(), **body.model_dump(), "created_at": iso(now_utc()), "created_by": user["id"]}
+    await db.prompt_templates.insert_one(doc)
+    doc.pop("_id", None)
+    await log_activity(user["id"], "prompt_created", {"key": body.key}, "prompt", doc["id"])
+    return doc
+
+
+@api.patch("/admin/prompts/{prompt_id}")
+async def patch_prompt(prompt_id: str, body: PromptTemplatePatch, user: dict = Depends(require_role("admin"))):
+    update = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not update:
+        return {"ok": True}
+    update["updated_at"] = iso(now_utc())
+    update["updated_by"] = user["id"]
+    res = await db.prompt_templates.update_one({"id": prompt_id}, {"$set": update})
+    if not res.matched_count:
+        raise HTTPException(404, "Not found")
+    await log_activity(user["id"], "prompt_updated", update, "prompt", prompt_id)
+    return {"ok": True}
+
+
+# ---------- Password management ----------
+@api.post("/auth/change-password")
+async def change_password(body: ChangePasswordIn, user: dict = Depends(get_current_user)):
+    full = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    if not full or not verify_pw(body.current_password, full.get("password_hash", "")):
+        raise HTTPException(400, "Current password is incorrect")
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"password_hash": hash_pw(body.new_password), "password_changed_at": iso(now_utc())}},
+    )
+    await log_activity(user["id"], "password_changed")
+    return {"ok": True}
+
+
+@api.post("/admin/users/{user_id}/reset-password")
+async def admin_reset_password(user_id: str, body: AdminResetPasswordIn, user: dict = Depends(require_role("admin"))):
+    target = await db.users.find_one({"id": user_id, "is_deleted": {"$ne": True}})
+    if not target:
+        raise HTTPException(404, "User not found")
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"password_hash": hash_pw(body.new_password), "password_reset_at": iso(now_utc()), "password_reset_by": user["id"]}},
+    )
+    await log_activity(user["id"], "admin_password_reset", {"target_user_id": user_id, "target_email": target.get("email")}, "user", user_id)
+    return {"ok": True}
+
+
+# ---------- Reports / PDF ----------
+@api.get("/admin/reports/timesheet")
+async def timesheet_pdf(
+    user: dict = Depends(require_role("admin", "manager")),
+    days: int = Query(7, ge=1, le=90),
+    user_id: Optional[str] = Query(None),
+):
+    """Generate a PDF timesheet for the last N days, optionally for a single user."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.units import inch
+    from collections import defaultdict
+
+    end = now_utc()
+    start = end - timedelta(days=days)
+    q: dict = {"punch_in": {"$gte": iso(start)}}
+    if user_id:
+        q["user_id"] = user_id
+    rows = await db.attendance_logs.find(q, {"_id": 0}).sort("punch_in", 1).to_list(2000)
+
+    # product counts per (user, day)
+    products = await db.generated_products.find(
+        {"generated_at": {"$gte": iso(start)}}, {"_id": 0, "generated_by_user_id": 1, "generated_at": 1}
+    ).to_list(5000)
+    pcount: dict[tuple[str, str], int] = defaultdict(int)
+    for p in products:
+        d = p["generated_at"][:10]
+        pcount[(p["generated_by_user_id"], d)] += 1
+
+    # aggregated totals
+    agg: dict[str, dict] = defaultdict(lambda: {"name": "", "minutes": 0, "breaks": 0, "products": 0, "days": set()})
+    for r in rows:
+        a = agg[r["user_id"]]
+        a["name"] = r["user_name"]
+        mins = r.get("total_minutes") or (
+            int((now_utc() - datetime.fromisoformat(r["punch_in"])).total_seconds() // 60) if not r.get("punch_out") else 0
+        )
+        a["minutes"] += mins
+        a["breaks"] += r.get("break_minutes", 0)
+        a["days"].add(r["punch_in"][:10])
+    for uid, a in agg.items():
+        total_p = await db.generated_products.count_documents({"generated_by_user_id": uid, "generated_at": {"$gte": iso(start)}})
+        a["products"] = total_p
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=LETTER, leftMargin=36, rightMargin=36, topMargin=48, bottomMargin=36)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("title", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=20, textColor=colors.HexColor("#0c140f"))
+    sub_style = ParagraphStyle("sub", parent=styles["Normal"], fontName="Helvetica", fontSize=10, textColor=colors.HexColor("#6b7d72"))
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=13, textColor=colors.HexColor("#0c140f"), spaceAfter=8)
+
+    flow = []
+    flow.append(Paragraph("Gems &amp; Luxury — Timesheet", title_style))
+    flow.append(Paragraph(f"{start.strftime('%Y-%m-%d')} → {end.strftime('%Y-%m-%d')} · {days} day window · generated {end.strftime('%Y-%m-%d %H:%M UTC')}", sub_style))
+    flow.append(Spacer(1, 16))
+
+    # Aggregated totals table
+    flow.append(Paragraph("Summary by worker", h2))
+    agg_data = [["Worker", "Days worked", "Total hours", "Break minutes", "Products"]]
+    for uid, a in sorted(agg.items(), key=lambda x: -x[1]["minutes"]):
+        hours = f"{a['minutes'] // 60}h {a['minutes'] % 60:02d}m"
+        agg_data.append([a["name"] or uid[:8], str(len(a["days"])), hours, str(a["breaks"]), str(a["products"])])
+    if len(agg_data) == 1:
+        agg_data.append(["No data", "—", "—", "—", "—"])
+    t = Table(agg_data, colWidths=[1.8 * inch, 0.9 * inch, 1.1 * inch, 1.1 * inch, 0.9 * inch])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0c140f")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#D4AF37")),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 9),
+        ("FONTSIZE", (0, 1), (-1, -1), 9),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f7f5")]),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#21362A")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    flow.append(t)
+    flow.append(Spacer(1, 18))
+
+    # Per-day detail
+    flow.append(Paragraph("Daily detail", h2))
+    detail = [["Worker", "Date", "Punch in", "Punch out", "Hours", "Break", "Products", "Status"]]
+    for r in rows:
+        pin = datetime.fromisoformat(r["punch_in"])
+        pout = datetime.fromisoformat(r["punch_out"]) if r.get("punch_out") else None
+        mins = r.get("total_minutes") or (int((now_utc() - pin).total_seconds() // 60) if not pout else 0)
+        hours = f"{mins // 60}h {mins % 60:02d}m"
+        detail.append([
+            r["user_name"], pin.strftime("%Y-%m-%d"),
+            pin.strftime("%H:%M"), pout.strftime("%H:%M") if pout else "open",
+            hours, f"{r.get('break_minutes', 0)}m",
+            str(pcount.get((r["user_id"], r["punch_in"][:10]), 0)),
+            "auto" if r.get("auto_punched_out") else ("open" if not pout else "closed"),
+        ])
+    if len(detail) == 1:
+        detail.append(["No attendance in window", "—", "—", "—", "—", "—", "—", "—"])
+    t2 = Table(detail, colWidths=[1.4 * inch, 0.85 * inch, 0.7 * inch, 0.7 * inch, 0.75 * inch, 0.55 * inch, 0.65 * inch, 0.6 * inch])
+    t2.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0c140f")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#D4AF37")),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f7f5")]),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#21362A")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    flow.append(t2)
+    flow.append(Spacer(1, 12))
+    flow.append(Paragraph("Generated by Gems &amp; Luxury Internal Studio.", sub_style))
+
+    doc.build(flow)
+    buf.seek(0)
+    pdf = buf.read()
+    await log_activity(user["id"], "timesheet_exported", {"days": days, "user_id": user_id, "rows": len(rows)})
+    fname = f"timesheet_{end.strftime('%Y%m%d')}_{days}d.pdf"
+    return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 # ---------- Seed ----------
 async def seed():
     # admin
@@ -1014,6 +1229,14 @@ async def seed():
                 "id": new_id(), "name": n, "words": w, "enabled": True,
                 "created_at": iso(now_utc()),
             })
+    # prompt templates
+    if await db.prompt_templates.count_documents({}) == 0:
+        for tpl in ai_service.DEFAULT_PROMPTS:
+            await db.prompt_templates.insert_one({
+                "id": new_id(), **tpl,
+                "created_at": iso(now_utc()),
+            })
+        logger.info("seeded prompt templates")
     logger.info("seed complete")
 
 

@@ -10,8 +10,8 @@ import { motion } from "framer-motion";
 
 export default function Login() {
   const { user, login } = useAuth();
-  const [email, setEmail] = useState("admin@gemsandluxury.com");
-  const [password, setPassword] = useState("Admin@123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const nav = useNavigate();
 
@@ -76,7 +76,6 @@ export default function Login() {
             className="w-full h-11 bg-[#D4AF37] hover:bg-[#F0C84A] text-[#050A07] rounded-sm font-semibold tracking-wide">
             {loading ? "Signing in…" : "Enter Studio"}
           </Button>
-          <p className="text-xs text-[#A1B4A8]">Default admin: <span className="text-white">admin@gemsandluxury.com / Admin@123</span> · Worker: <span className="text-white">worker@gemsandluxury.com / Worker@123</span></p>
         </motion.form>
       </div>
     </div>

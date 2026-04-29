@@ -1,9 +1,10 @@
-import React from "react";
+import React, { useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { Brand } from "./Brand";
 import { Button } from "./ui/button";
-import { LogOut, LayoutDashboard, Users, Package, Tag, DollarSign, Image, Clock, Activity, Settings } from "lucide-react";
+import { LogOut, LayoutDashboard, Users, Package, Tag, DollarSign, Image, Clock, Activity, Settings, Sparkles, KeyRound } from "lucide-react";
+import ChangePasswordDialog from "./ChangePasswordDialog";
 
 const adminNav = [
   { to: "/admin", icon: LayoutDashboard, label: "Overview", end: true },
@@ -13,6 +14,7 @@ const adminNav = [
   { to: "/admin/pricing", icon: DollarSign, label: "Pricing" },
   { to: "/admin/images", icon: Image, label: "Images" },
   { to: "/admin/attendance", icon: Clock, label: "Attendance" },
+  { to: "/admin/prompts", icon: Sparkles, label: "Prompts" },
   { to: "/admin/activity", icon: Activity, label: "Activity" },
   { to: "/admin/settings", icon: Settings, label: "Settings" },
 ];
@@ -20,6 +22,7 @@ const adminNav = [
 export function AdminLayout({ children }) {
   const { user, logout } = useAuth();
   const nav = useNavigate();
+  const [pwOpen, setPwOpen] = useState(false);
   return (
     <div className="min-h-screen flex bg-[#050A07] text-[#F5F5F5]">
       <aside className="w-64 border-r border-[#21362A] p-6 flex flex-col gap-6 sticky top-0 h-screen">
@@ -48,10 +51,13 @@ export function AdminLayout({ children }) {
           <div className="label-overline mb-1">Signed in</div>
           <div className="text-sm text-white">{user?.name}</div>
           <div className="text-xs text-[#A1B4A8]">{user?.email}</div>
+          <Button variant="ghost" size="sm" className="mt-3 w-full justify-start text-[#A1B4A8] hover:text-white" onClick={() => setPwOpen(true)} data-testid="change-password-btn">
+            <KeyRound className="w-4 h-4 mr-2" /> Change password
+          </Button>
           <Button
             variant="ghost"
             size="sm"
-            className="mt-3 w-full justify-start text-[#A1B4A8] hover:text-white"
+            className="w-full justify-start text-[#A1B4A8] hover:text-white"
             onClick={async () => { await logout(); nav("/login"); }}
             data-testid="logout-btn"
           >
@@ -60,6 +66,7 @@ export function AdminLayout({ children }) {
         </div>
       </aside>
       <main className="flex-1 p-8">{children}</main>
+      <ChangePasswordDialog open={pwOpen} onOpenChange={setPwOpen} />
     </div>
   );
 }
@@ -67,6 +74,7 @@ export function AdminLayout({ children }) {
 export function WorkerLayout({ children }) {
   const { user, logout } = useAuth();
   const nav = useNavigate();
+  const [pwOpen, setPwOpen] = useState(false);
   return (
     <div className="min-h-screen flex flex-col bg-[#050A07] text-[#F5F5F5]">
       <header className="sticky top-0 z-20 border-b border-white/10 bg-black/60 backdrop-blur-xl">
@@ -77,6 +85,9 @@ export function WorkerLayout({ children }) {
               <div className="text-sm text-white">{user?.name}</div>
               <div className="label-overline text-[10px]">Worker Studio</div>
             </div>
+            <Button variant="ghost" size="sm" onClick={() => setPwOpen(true)} data-testid="change-password-btn">
+              <KeyRound className="w-4 h-4 mr-2" /> Password
+            </Button>
             <Button variant="ghost" size="sm" onClick={async () => { await logout(); nav("/login"); }} data-testid="logout-btn">
               <LogOut className="w-4 h-4 mr-2" /> Sign out
             </Button>
@@ -84,6 +95,7 @@ export function WorkerLayout({ children }) {
         </div>
       </header>
       <main className="flex-1 max-w-7xl mx-auto w-full p-6">{children}</main>
+      <ChangePasswordDialog open={pwOpen} onOpenChange={setPwOpen} />
     </div>
   );
 }
