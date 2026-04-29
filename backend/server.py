@@ -534,14 +534,17 @@ async def get_product(product_id: str, user: dict = Depends(get_current_user)):
 
 @api.patch("/products/{product_id}")
 async def patch_product(product_id: str, body: UpdateProductIn, user: dict = Depends(get_current_user)):
+    existing = await db.generated_products.find_one({"id": product_id}, {"_id": 0, "generated_by_user_id": 1})
+    if not existing:
+        raise HTTPException(404, "Not found")
+    if user["role"] == "worker" and existing.get("generated_by_user_id") != user["id"]:
+        raise HTTPException(403, "Forbidden")
     update = {k: v for k, v in body.model_dump().items() if v is not None}
     if not update:
         return {"ok": True}
     update["updated_at"] = iso(now_utc())
     update["updated_by"] = user["id"]
-    res = await db.generated_products.update_one({"id": product_id}, {"$set": update})
-    if not res.matched_count:
-        raise HTTPException(404, "Not found")
+    await db.generated_products.update_one({"id": product_id}, {"$set": update})
     await log_activity(user["id"], "product_edited", update, "product", product_id)
     return {"ok": True}
 
@@ -685,9 +688,12 @@ async def download_image(image_id: str, authorization: Optional[str] = Header(No
     if not token:
         raise HTTPException(401, "Missing token")
     try:
-        jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
     except jwt.PyJWTError:
         raise HTTPException(401, "Invalid token")
+    user = await db.users.find_one({"id": payload["sub"], "is_deleted": {"$ne": True}, "active": True}, {"_id": 0})
+    if not user:
+        raise HTTPException(401, "Inactive user")
     asset = await db.image_assets.find_one({"id": image_id, "is_deleted": {"$ne": True}}, {"_id": 0})
     if not asset:
         # maybe a variation

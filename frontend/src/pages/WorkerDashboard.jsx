@@ -84,7 +84,7 @@ export default function WorkerDashboard() {
               <Button onClick={() => call("/attendance/break/end", "Break ended")} data-testid="break-end-btn" className="bg-[#097969] hover:bg-[#0a8a78]"><Pause className="w-4 h-4 mr-2"/>End break</Button>
             )}
             {punchedIn && (
-              <Button onClick={() => call("/attendance/punch-out", "Punched out")} variant="outline" data-testid="punch-out-btn" className="border-[#E63946] text-[#E63946] hover:bg-[#E63946]/10"><PunchOut className="w-4 h-4 mr-2"/>Punch out</Button>
+              <Button onClick={() => call("/attendance/punch-out", "Punched out")} data-testid="punch-out-btn" className="bg-[#E63946] hover:bg-[#d72e3b] text-white font-semibold"><PunchOut className="w-4 h-4 mr-2"/>Punch out</Button>
             )}
           </div>
         </section>
