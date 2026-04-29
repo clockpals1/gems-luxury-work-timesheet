@@ -10,7 +10,7 @@ import { toast } from "sonner";
 
 export default function AdminSettings() {
   const [s, setS] = useState({ idle_timeout_minutes: 60, warning_seconds: 300, max_break_minutes: 30, currency: "USD", features: {} });
-  useEffect(() => { api.get("/admin/settings").then(r => setS({ ...s, ...r.data })); /* eslint-disable-next-line */ }, []);
+  useEffect(() => { api.get("/admin/settings").then(r => setS(prev => ({ ...prev, ...r.data }))); }, []);
   const save = async () => {
     try { await api.patch("/admin/settings", s); toast.success("Settings saved"); }
     catch { toast.error("Failed"); }

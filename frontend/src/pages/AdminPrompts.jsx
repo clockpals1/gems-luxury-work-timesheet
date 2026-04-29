@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { api } from "../lib/api";
 import { AdminLayout } from "../components/Layout";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
@@ -24,15 +24,15 @@ export default function AdminPrompts() {
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const r = await api.get("/admin/prompts");
     setItems(r.data);
     if (!activeId && r.data.length) {
       setActiveId(r.data[0].id);
       setDraft(r.data[0]);
     }
-  };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+  }, [activeId]);
+  useEffect(() => { load(); }, [load]);
 
   const select = (it) => { setActiveId(it.id); setDraft({ ...it }); };
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { api, imgUrl } from "../lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
@@ -10,12 +10,12 @@ export default function ImageVariationsDialog({ id, open, onOpenChange }) {
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!id) return;
     const r = await api.get(`/admin/images/${id}/variations`);
     setData(r.data);
-  };
-  useEffect(() => { if (open) load(); /* eslint-disable-next-line */ }, [open, id]);
+  }, [id]);
+  useEffect(() => { if (open) load(); }, [open, load]);
 
   const enhance = async () => {
     setBusy(true);
