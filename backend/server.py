@@ -16,6 +16,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from starlette.middleware.cors import CORSMiddleware
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import storage
 import ai_service
@@ -158,6 +159,7 @@ class UpdateProductIn(BaseModel):
     sizes: Optional[list[str]] = None
     final_price: Optional[int] = None
     status: Optional[str] = None
+    pricing_meta: Optional[dict] = None
 
 
 class NamingFamilyIn(BaseModel):
@@ -539,7 +541,11 @@ async def patch_product(product_id: str, body: UpdateProductIn, user: dict = Dep
         raise HTTPException(404, "Not found")
     if user["role"] == "worker" and existing.get("generated_by_user_id") != user["id"]:
         raise HTTPException(403, "Forbidden")
-    update = {k: v for k, v in body.model_dump().items() if v is not None}
+    payload = body.model_dump()
+    # Only admins/managers may edit pricing_meta
+    if user["role"] == "worker":
+        payload.pop("pricing_meta", None)
+    update = {k: v for k, v in payload.items() if v is not None}
     if not update:
         return {"ok": True}
     update["updated_at"] = iso(now_utc())
@@ -547,6 +553,56 @@ async def patch_product(product_id: str, body: UpdateProductIn, user: dict = Dep
     await db.generated_products.update_one({"id": product_id}, {"$set": update})
     await log_activity(user["id"], "product_edited", update, "product", product_id)
     return {"ok": True}
+
+
+def _slugify(s: str) -> str:
+    import re as _re
+    return _re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")[:80]
+
+
+@api.get("/products/{product_id}/cms-payload")
+async def cms_payload(product_id: str, user: dict = Depends(require_role("admin", "manager"))):
+    p = await db.generated_products.find_one({"id": product_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Not found")
+    backend = os.environ.get("PUBLIC_BACKEND_URL", "")
+    image_urls: list[str] = []
+    if p.get("image_asset_id"):
+        image_urls.append(f"{backend}/api/images/{p['image_asset_id']}/download")
+    for vid in p.get("image_variation_ids", []) or []:
+        image_urls.append(f"{backend}/api/images/{vid}/download")
+    cat_path = (p.get("category") or "").split("/")
+    product_type = cat_path[-1].strip() if cat_path else ""
+    vendor = "Gems & Luxury"
+    body_html = "".join(f"<p>{para.strip()}</p>" for para in (p.get("full_description") or "").split("\n") if para.strip())
+    variants = [
+        {
+            "option1": s,
+            "sku": f"GL-{_slugify(p['name'])}-{_slugify(s)}",
+            "price": str(p.get("final_price", 0)),
+            "currency": p.get("currency", "USD"),
+            "inventory_management": None,
+        }
+        for s in (p.get("sizes") or [])
+    ]
+    return {
+        "handle": _slugify(p["name"]),
+        "title": p["name"],
+        "short_title": p.get("short_title"),
+        "body_html": body_html,
+        "vendor": vendor,
+        "product_type": product_type,
+        "tags": p.get("tags", []),
+        "options": ["Size"] if variants else [],
+        "variants": variants,
+        "images": image_urls,
+        "metafields": {
+            "ai.pricing_meta": p.get("pricing_meta", {}),
+            "ai.generated_by": p.get("generated_by_name"),
+            "ai.generated_at": p.get("generated_at"),
+            "ai.short_description": p.get("short_description"),
+        },
+    }
 
 
 @api.post("/products/{product_id}/export")
@@ -712,6 +768,56 @@ async def patch_image(image_id: str, body: dict, user: dict = Depends(require_ro
     allowed["updated_at"] = iso(now_utc())
     await db.image_assets.update_one({"id": image_id}, {"$set": allowed})
     return {"ok": True}
+
+
+@api.post("/admin/images/upload-bulk")
+async def upload_images_bulk(
+    files: list[UploadFile] = File(...),
+    category: str = Form(""),
+    tags: str = Form(""),
+    user: dict = Depends(require_role("admin", "manager")),
+):
+    out: list[dict] = []
+    errors: list[dict] = []
+    for f in files:
+        try:
+            data = await f.read()
+            if not data:
+                errors.append({"filename": f.filename, "error": "empty"})
+                continue
+            path = storage.build_path(user["id"], f.filename or "image.png")
+            result = storage.put_object(path, data, f.content_type or "image/png")
+            doc = {
+                "id": new_id(),
+                "storage_path": result["path"],
+                "filename": f.filename,
+                "content_type": f.content_type,
+                "size": result.get("size", len(data)),
+                "category": category or None,
+                "tags": [t.strip() for t in tags.split(",") if t.strip()],
+                "status": "available",
+                "assigned_count": 0,
+                "is_deleted": False,
+                "uploaded_by": user["id"],
+                "uploaded_at": iso(now_utc()),
+            }
+            await db.image_assets.insert_one(doc)
+            doc.pop("_id", None)
+            out.append(doc)
+            await log_activity(user["id"], "image_uploaded", {"filename": f.filename, "bulk": True}, "image", doc["id"])
+        except Exception as e:
+            logger.exception("bulk upload entry failed")
+            errors.append({"filename": f.filename, "error": str(e)})
+    return {"uploaded": out, "errors": errors, "count": len(out)}
+
+
+@api.get("/admin/images/{image_id}/variations")
+async def list_variations(image_id: str, user: dict = Depends(require_role("admin", "manager"))):
+    asset = await db.image_assets.find_one({"id": image_id, "is_deleted": {"$ne": True}}, {"_id": 0})
+    if not asset:
+        raise HTTPException(404, "Not found")
+    variations = await db.image_variations.find({"source_image_id": image_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return {"source": asset, "variations": variations}
 
 
 @api.post("/admin/images/{image_id}/enhance")
@@ -916,16 +1022,31 @@ app.add_middleware(
 )
 
 
+_scheduler: AsyncIOScheduler | None = None
+
+
 @app.on_event("startup")
 async def on_start():
+    global _scheduler
     try:
         storage.init_storage()
         logger.info("storage ready")
     except Exception as e:
         logger.warning("storage init failed: %s", e)
     await seed()
+    try:
+        _scheduler = AsyncIOScheduler(timezone="UTC")
+        _scheduler.add_job(auto_punch_out_sweep, "interval", minutes=2, id="auto_punch_out", coalesce=True, max_instances=1)
+        _scheduler.start()
+        logger.info("scheduler started — auto punch-out every 2m")
+    except Exception as e:
+        logger.warning("scheduler init failed: %s", e)
 
 
 @app.on_event("shutdown")
 async def on_stop():
+    global _scheduler
+    if _scheduler:
+        try: _scheduler.shutdown(wait=False)
+        except Exception: pass
     client.close()

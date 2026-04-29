@@ -5,10 +5,12 @@ import { Card, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { toast } from "sonner";
+import ProductDetailDialog from "../components/ProductDetailDialog";
 
 export default function AdminProducts() {
   const [items, setItems] = useState([]);
   const [filter, setFilter] = useState("all");
+  const [openId, setOpenId] = useState(null);
 
   const load = async () => {
     const r = await api.get("/products?limit=500");
@@ -63,8 +65,9 @@ export default function AdminProducts() {
                   </td>
                   <td className="text-right font-display text-[#D4AF37]">${p.final_price}</td>
                   <td className="pl-4"><Badge className="bg-[#132018] border border-[#21362A] text-[#A1B4A8]">{p.status}</Badge></td>
-                  <td className="p-4 text-right">
-                    {p.status !== "exported" && <Button size="sm" variant="outline" onClick={() => doExport(p.id)} className="border-[#21362A]" data-testid={`export-${p.id}`}>Mark exported</Button>}
+                  <td className="p-4 text-right space-x-2">
+                    <Button size="sm" variant="outline" className="border-[#21362A]" onClick={() => setOpenId(p.id)} data-testid={`view-${p.id}`}>View</Button>
+                    {p.status !== "exported" && <Button size="sm" variant="outline" onClick={() => doExport(p.id)} className="border-[#21362A]" data-testid={`export-${p.id}`}>Export</Button>}
                   </td>
                 </tr>
               ))}
@@ -72,6 +75,7 @@ export default function AdminProducts() {
           </table>
         </CardContent>
       </Card>
+      <ProductDetailDialog id={openId} open={!!openId} onOpenChange={(v) => !v && setOpenId(null)} onSaved={() => { load(); }} />
     </AdminLayout>
   );
 }
