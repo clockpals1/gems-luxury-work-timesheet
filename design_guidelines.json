@@ -1,0 +1,85 @@
+{
+  "theme": "dark",
+  "archetype": "5 (Jewel & Luxury)",
+  "colors": {
+    "background": "#050A07",
+    "surface": "#0C140F",
+    "surface_secondary": "#132018",
+    "primary": "#D4AF37",
+    "primary_hover": "#F0C84A",
+    "secondary": "#097969",
+    "text_primary": "#F5F5F5",
+    "text_secondary": "#A1B4A8",
+    "border": "#21362A",
+    "accent_danger": "#E63946",
+    "accent_success": "#2A9D8F"
+  },
+  "typography": {
+    "heading_font": "Playfair Display",
+    "body_font": "Manrope",
+    "rules": [
+      "Do NOT use Inter, Roboto, or standard SaaS fonts for headings.",
+      "H1 Max text-5xl or text-6xl with tracking-tight.",
+      "Labels/Overlines must be uppercase, text-xs or text-sm, wide spacing (tracking-[0.2em]).",
+      "Keep body text legible with Manrope text-sm to text-base."
+    ]
+  },
+  "layout": {
+    "spacing_scale": "p-4, p-6, p-8, p-12 for generous breathing room in the dashboard.",
+    "dashboard_grid": "MODE B: Control Room Grid. Use grid-cols-1 md:grid-cols-3 lg:grid-cols-4 with gap-6 for Admin Panel.",
+    "surface_strategy": "Cards: Flat dark backgrounds with 1px border (#21362A). No muddy box-shadows. Header: Glassmorphism (bg-black/60, backdrop-blur-xl, border-b border-white/10)."
+  },
+  "motion": {
+    "hover_states": "-translate-y-1, text color changes, subtle glow using box-shadow for primary buttons.",
+    "libraries": "framer-motion for elegant layout transitions and micro-interactions (e.g., product generation loader)."
+  },
+  "components": {
+    "cards": "Sharp or slightly rounded (max 4px to 8px). Flat colors.",
+    "buttons": "Primary buttons: Gold bg (#D4AF37) with black text. Sharp edges.",
+    "tables": "Shadcn-based, minimal styling, transparent row backgrounds, bottom border only.",
+    "inputs": "Dark backgrounds (#0C140F), subtle border, gold focus rings (focus:ring-primary).",
+    "testing": "MANDATORY data-testid attributes for ALL interactable buttons, links, inputs, and state elements (e.g., data-testid='punch-in-btn')."
+  },
+  "media": {
+    "image_urls": [
+      {
+        "url": "https://images.pexels.com/photos/1475033/pexels-photo-1475033.jpeg",
+        "category": "login_background",
+        "description": "Smooth dark green silk fabric texture used as full-bleed background for the login screen to establish luxury tone."
+      },
+      {
+        "url": "https://images.pexels.com/photos/2248589/pexels-photo-2248589.jpeg",
+        "category": "accent_texture",
+        "description": "Crumpled gold fabric texture for use in subtle premium accents or admin dashboard banner backgrounds."
+      },
+      {
+        "url": "https://images.pexels.com/photos/30117936/pexels-photo-30117936.jpeg",
+        "category": "product_sample",
+        "description": "African woman in vibrant dress, to be used in Worker Dashboard as assigned image sample."
+      },
+      {
+        "url": "https://images.pexels.com/photos/10919896/pexels-photo-10919896.jpeg",
+        "category": "product_sample",
+        "description": "Portrait of a woman in African fashion, to be used in Admin Image Library."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1549439602-43ebca2327af",
+        "category": "product_sample",
+        "description": "Luxury clothing accessory flatlay, to be used in Generate Product or Admin Image Library."
+      }
+    ],
+    "rules": [
+      "Never use generic placeholder images like via.placeholder.com.",
+      "Use the product_sample URLs for all mocked product flows and library inventories."
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Force dark mode configuration. The app is a premium dark theme natively.",
+    "Apply 'Playfair Display' for Headings and 'Manrope' for body copy.",
+    "Worker Dashboard: Optimize for single-task focus. Large assigned image, clear final generated price, prominent punch in/out features.",
+    "Admin Dashboard: Build a dense but elegant 'Bento Grid' with specific sections for Attendance, AI Usage, Activity Logs, and Pricing Rules.",
+    "Avoid standard 'Vercel SaaS' look. Incorporate the provided silk and gold textures subtly (e.g. as masked overlays).",
+    "Replace Shadcn's default slate colors with our custom jewel-tone palette (surface, background, border).",
+    "Never skip 'data-testid' on interactive elements. This is crucial for testing."
+  ]
+}
