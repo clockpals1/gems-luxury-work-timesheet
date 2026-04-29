@@ -16,7 +16,11 @@ distro==1.9.0
 dnspython==2.8.0
 ecdsa==0.19.2
 email-validator==2.3.0
-emergentintegrations==0.1.0
+# emergentintegrations==0.1.0
+# NOTE: This is a private package not available on PyPI
+# Install from Emergent's private PyPI registry:
+# pip install --index-url https://<emergent-pypi-url>/simple emergentintegrations==0.1.0
+# Or configure in Render environment variables: PIP_INDEX_URL
 fastapi==0.110.1
 fastuuid==0.14.0
 filelock==3.25.2
