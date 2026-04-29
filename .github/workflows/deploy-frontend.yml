@@ -37,7 +37,4 @@ jobs:
         run: npm install -g wrangler
 
       - name: Deploy to Cloudflare Pages
-        run: wrangler pages deploy frontend/build --project-name=gems-luxury-frontend
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: wrangler pages deploy frontend/build --project-name=gems-luxury-frontend --auth-token=${{ secrets.CLOUDFLARE_API_TOKEN }}
