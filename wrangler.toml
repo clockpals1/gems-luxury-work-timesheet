@@ -1,0 +1,4 @@
+# Root wrangler.toml for Cloudflare Pages deployment
+# The backend has its own wrangler.toml in backend/ directory
+name = "gems-luxury-frontend"
+compatibility_date = "2024-01-01"
