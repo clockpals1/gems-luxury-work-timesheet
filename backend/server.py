@@ -875,13 +875,16 @@ async def dashboard_stats(user: dict = Depends(require_role("admin", "manager"))
     idle = 0
     settings = await get_settings()
     idle_cutoff = now_utc() - timedelta(minutes=settings.get("idle_timeout_minutes", 60))
-    for a in open_atts:
-        ob = await _open_break(a["id"])
-        if ob:
-            on_break += 1
-            continue
-        if datetime.fromisoformat(a["last_activity"]) < idle_cutoff:
-            idle += 1
+    if open_atts:
+        att_ids = [a["id"] for a in open_atts]
+        breaks = await db.break_logs.find({"attendance_id": {"$in": att_ids}, "end": None}, {"_id": 0}).to_list(1000)
+        on_break_set = {b["attendance_id"] for b in breaks}
+        on_break = len(on_break_set)
+        for a in open_atts:
+            if a["id"] in on_break_set:
+                continue
+            if datetime.fromisoformat(a["last_activity"]) < idle_cutoff:
+                idle += 1
     products_today = await db.generated_products.count_documents({"generated_at": {"$gte": iso(today)}})
     products_week = await db.generated_products.count_documents({"generated_at": {"$gte": iso(week)}})
     available_images = await db.image_assets.count_documents({"status": "available", "is_deleted": {"$ne": True}})
@@ -901,12 +904,16 @@ async def dashboard_stats(user: dict = Depends(require_role("admin", "manager"))
 @api.get("/admin/dashboard/live-users")
 async def live_users(user: dict = Depends(require_role("admin", "manager"))):
     open_atts = await db.attendance_logs.find({"punch_out": None}, {"_id": 0}).to_list(500)
-    out = []
     settings = await get_settings()
     idle_cutoff = now_utc() - timedelta(minutes=settings.get("idle_timeout_minutes", 60))
+    on_break_set: set[str] = set()
+    if open_atts:
+        att_ids = [a["id"] for a in open_atts]
+        breaks = await db.break_logs.find({"attendance_id": {"$in": att_ids}, "end": None}, {"_id": 0}).to_list(1000)
+        on_break_set = {b["attendance_id"] for b in breaks}
+    out = []
     for a in open_atts:
-        ob = await _open_break(a["id"])
-        state = "on_break" if ob else ("idle" if datetime.fromisoformat(a["last_activity"]) < idle_cutoff else "active")
+        state = "on_break" if a["id"] in on_break_set else ("idle" if datetime.fromisoformat(a["last_activity"]) < idle_cutoff else "active")
         out.append({"user_id": a["user_id"], "user_name": a["user_name"], "state": state,
                     "punch_in": a["punch_in"], "last_activity": a["last_activity"], "attendance_id": a["id"]})
     return out
