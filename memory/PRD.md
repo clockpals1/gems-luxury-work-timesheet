@@ -26,30 +26,31 @@ Internal web application for Gems & Luxury (gemsandluxury.com), an African luxur
 - Naming families CRUD, Pricing rules, Categories, Settings, Attendance admin (force punch-out), Activity logs
 - Tests: 34/34 backend + frontend e2e
 
-## Iteration 2 (2026-04-29)
-- **APScheduler** wired — auto-punch-out sweep ticks every 2 minutes (uses admin `idle_timeout_minutes`)
-- **CMS export payload**: `GET /api/products/{id}/cms-payload` returns Shopify-shaped JSON (handle, body_html, vendor, variants[size→sku], images[urls], metafields[ai.*])
-- **Admin pricing_meta override**: `ProductDetailDialog` from `/admin/products` allows editing `final_price` + `pricing_meta` (perceived quality, complexity, occasion tier, uplift, reasoning); `Copy CMS JSON` button. Worker PATCH silently strips `pricing_meta`.
-- **Image variation browser**: `GET /api/admin/images/{id}/variations` + `ImageVariationsDialog` shows source + enhanced + alternates side-by-side with inline Enhance / Generate alternates buttons
-- **Bulk image upload**: `POST /api/admin/images/upload-bulk` accepts multiple files in one request; admin UI uses `<input multiple>` so files can be selected at once with shared tags/category
-- **Production-readiness**: deployment_agent **PASS**; fixed N+1 query in `dashboard_stats` and `live_users` (batched with `$in`)
-- Tests: 10/10 new tests passed (iteration_2)
+## Iteration 3 (2026-04-29) — Production hardening
+- **AI prompts moved to MongoDB** (`prompt_templates` collection, seeded on startup) — no longer hardcoded in `ai_service.py`
+- **Prompt template editor UI** at `/admin/prompts` — admin can edit name/description/provider/model/system_prompt/user_prompt_template/enabled with live save
+- **Fuzzy duplicate-name detection** via `rapidfuzz.token_set_ratio` (threshold 85) — generation retries up to 2× with avoid-list if proposed name is too similar to recent products
+- **Weekly timesheet PDF** export at `/api/admin/reports/timesheet?days=N` (reportlab) — branded summary + per-day detail; UI download button on Attendance page with 7/14/30/60/90-day selector
+- **Self-service password change** (`POST /api/auth/change-password`) — sidebar/header dialog for any logged-in user
+- **Admin password reset** (`POST /api/admin/users/{id}/reset-password`) — admin-only, button per user row
+- **Role assignment by admin** — inline Role select per user (worker/manager/admin); admins can promote others to admin
+- **Login page cleaned** — removed test credentials hint and pre-filled defaults
+- **`.gitignore`** unblocked `.env` files for Emergent deploy
+- Tests: 13/13 backend pass; frontend 100%; deployment_agent **PASS**
 
 ## Seed credentials
-- Admin: `admin@gemsandluxury.com` / `Admin@123`
-- Worker: `worker@gemsandluxury.com` / `Worker@123`
+- Admin: `admin@gemsandluxury.com` / `Admin@123` (rotate via `/auth/change-password` once signed in)
 
 ## Backlog
 ### P1
-- Prompt template editor UI (AI prompts as configurable records)
-- Duplicate-name detection with fuzzy search before generation finalizes
-- Weekly timesheet PDF export
 - "Publish to Shopify" one-click direct push using `cms-payload`
+- Admin-managed naming families used per-category (currently global)
+- Email digest of overnight idle / auto-punch-out events
 
 ### P2
 - Manager read-only permission fine-tuning per page
-- Email/Slack digests for admin alerts (idle, exports, errors)
 - Audit-trail diff view per product
+- Per-prompt usage analytics (tokens, latency, success rate)
 
 ## Risks / assumptions
 - AI calls are real (~10–15s Claude, ~15–30s Nano Banana) — add UI loading skeletons for long generations.

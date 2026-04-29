@@ -51,7 +51,7 @@ export function AdminLayout({ children }) {
           <div className="label-overline mb-1">Signed in</div>
           <div className="text-sm text-white">{user?.name}</div>
           <div className="text-xs text-[#A1B4A8]">{user?.email}</div>
-          <Button variant="ghost" size="sm" className="mt-3 w-full justify-start text-[#A1B4A8] hover:text-white" onClick={() => setPwOpen(true)} data-testid="change-password-btn">
+          <Button variant="ghost" size="sm" className="mt-3 w-full justify-start text-[#A1B4A8] hover:text-white" onClick={() => setPwOpen(true)} data-testid="sidebar-change-password-btn">
             <KeyRound className="w-4 h-4 mr-2" /> Change password
           </Button>
           <Button
@@ -85,7 +85,7 @@ export function WorkerLayout({ children }) {
               <div className="text-sm text-white">{user?.name}</div>
               <div className="label-overline text-[10px]">Worker Studio</div>
             </div>
-            <Button variant="ghost" size="sm" onClick={() => setPwOpen(true)} data-testid="change-password-btn">
+            <Button variant="ghost" size="sm" onClick={() => setPwOpen(true)} data-testid="header-change-password-btn">
               <KeyRound className="w-4 h-4 mr-2" /> Password
             </Button>
             <Button variant="ghost" size="sm" onClick={async () => { await logout(); nav("/login"); }} data-testid="logout-btn">
