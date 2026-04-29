@@ -1,5 +1,9 @@
 name: Deploy Frontend to Cloudflare Pages
 
+# DISABLED - Using Cloudflare Pages Git integration instead
+# This workflow is disabled in favor of Cloudflare's direct Git integration
+# which is simpler and more reliable
+
 on:
   push:
     branches:
@@ -13,6 +17,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     name: Deploy to Cloudflare Pages
+    if: false  # Disabled - using Cloudflare Pages Git integration instead
     
     steps:
       - name: Checkout repository
