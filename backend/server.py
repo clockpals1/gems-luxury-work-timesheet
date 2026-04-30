@@ -308,6 +308,21 @@ async def update_user(user_id: str, body: UpdateUserIn, user: dict = Depends(req
     return {"ok": True}
 
 
+@api.delete("/admin/users/{user_id}")
+async def delete_user(user_id: str, user: dict = Depends(require_role("admin"))):
+    if user_id == user["id"]:
+        raise HTTPException(400, "Cannot delete your own account")
+    target = await db.users.find_one({"id": user_id, "is_deleted": {"$ne": True}})
+    if not target:
+        raise HTTPException(404, "User not found")
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"is_deleted": True, "active": False, "deleted_at": iso(now_utc()), "deleted_by": user["id"]}},
+    )
+    await log_activity(user["id"], "user_deleted", {"email": target.get("email")}, "user", user_id)
+    return {"ok": True}
+
+
 # ---------- Attendance ----------
 async def _open_attendance(user_id: str) -> Optional[dict]:
     return await db.attendance_logs.find_one({"user_id": user_id, "punch_out": None}, {"_id": 0})
