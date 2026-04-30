@@ -1,6 +1,9 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "";
+if (!BACKEND_URL) {
+  console.error("[api] REACT_APP_BACKEND_URL is not set — API calls will fail. Set the secret in GitHub and redeploy.");
+}
 export const API = `${BACKEND_URL}/api`;
 
 export const api = axios.create({ baseURL: API });
