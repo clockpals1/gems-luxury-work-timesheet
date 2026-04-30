@@ -37,6 +37,11 @@ let webpackConfig = {
       '@': path.resolve(__dirname, 'src'),
     },
     configure: (webpackConfig) => {
+      // Remove ForkTsCheckerWebpackPlugin — plain JS project, no TS checking needed,
+      // and the plugin causes an irreconcilable ajv@6/ajv@8 version conflict.
+      webpackConfig.plugins = webpackConfig.plugins.filter(
+        (p) => p.constructor && p.constructor.name !== 'ForkTsCheckerWebpackPlugin'
+      );
 
       // Add ignored patterns to reduce watched directories
         webpackConfig.watchOptions = {
