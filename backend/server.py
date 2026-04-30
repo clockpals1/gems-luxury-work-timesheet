@@ -14,7 +14,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, Form, Header, Query, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from starlette.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import storage
@@ -1042,14 +1041,22 @@ async def change_password(body: ChangePasswordIn, user: dict = Depends(get_curre
 
 @api.post("/admin/users/{user_id}/reset-password")
 async def admin_reset_password(user_id: str, body: AdminResetPasswordIn, user: dict = Depends(require_role("admin"))):
-    target = await db.users.find_one({"id": user_id, "is_deleted": {"$ne": True}})
+    try:
+        target = await db.users.find_one({"id": user_id, "is_deleted": {"$ne": True}})
+    except Exception as e:
+        logger.exception("reset-password find failed: %s", e)
+        raise HTTPException(500, "Database error")
     if not target:
         raise HTTPException(404, "User not found")
-    await db.users.update_one(
-        {"id": user_id},
-        {"$set": {"password_hash": hash_pw(body.new_password), "password_reset_at": iso(now_utc()), "password_reset_by": user["id"]}},
-    )
-    await log_activity(user["id"], "admin_password_reset", {"target_user_id": user_id, "target_email": target.get("email")}, "user", user_id)
+    try:
+        await db.users.update_one(
+            {"id": user_id},
+            {"$set": {"password_hash": hash_pw(body.new_password), "password_reset_at": iso(now_utc()), "password_reset_by": user["id"]}},
+        )
+        await log_activity(user["id"], "admin_password_reset", {"target_user_id": user_id, "target_email": target.get("email")}, "user", user_id)
+    except Exception as e:
+        logger.exception("reset-password update failed: %s", e)
+        raise HTTPException(500, "Database error")
     return {"ok": True}
 
 
@@ -1232,18 +1239,46 @@ async def health():
     return {"status": "ok"}
 
 
+# ---------- Raw ASGI CORS middleware ----------
+class _CORSEverywhere:
+    """Inject CORS headers on every HTTP response at the raw ASGI level.
+
+    This runs below FastAPI's exception handler so it adds headers even when
+    uvicorn catches an unhandled exception and sends a bare 500 response.
+    """
+    def __init__(self, app):
+        self._app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        if scope.get("method") == "OPTIONS":
+            headers = [
+                (b"access-control-allow-origin", b"*"),
+                (b"access-control-allow-methods", b"GET, POST, PUT, PATCH, DELETE, OPTIONS"),
+                (b"access-control-allow-headers", b"authorization, content-type, accept"),
+                (b"access-control-max-age", b"86400"),
+            ]
+            await send({"type": "http.response.start", "status": 200, "headers": headers})
+            await send({"type": "http.response.body", "body": b""})
+            return
+
+        async def _send_cors(message):
+            if message["type"] == "http.response.start":
+                hdrs = list(message.get("headers", []))
+                hdrs.append((b"access-control-allow-origin", b"*"))
+                hdrs.append((b"access-control-allow-headers", b"authorization, content-type, accept"))
+                message = {**message, "headers": hdrs}
+            await send(message)
+
+        await self._app(scope, receive, _send_cors)
+
+
 # ---------- App ----------
-_extra_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
-_cors_origins = _extra_origins or ["*"]
-
 app.include_router(api)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(_CORSEverywhere)
 
 
 _scheduler: AsyncIOScheduler | None = None
