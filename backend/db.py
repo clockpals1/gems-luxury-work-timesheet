@@ -19,6 +19,8 @@ import os
 import re
 from typing import Any, Iterable, Optional
 
+import asyncio
+from contextlib import asynccontextmanager
 import asyncpg
 
 logger = logging.getLogger(__name__)
@@ -59,13 +61,43 @@ async def init_pool(dsn: str) -> asyncpg.Pool:
         _pool = await asyncpg.create_pool(
             dsn=dsn,
             min_size=1,
-            max_size=10,
-            statement_cache_size=0,  # required for Supavisor transaction/session pooler
-            ssl="require",           # Supabase pooler enforces SSL
+            max_size=5,                          # stay within Supabase free-tier limits
+            statement_cache_size=0,              # required for Supavisor
+            ssl="require",
             command_timeout=30,
+            timeout=15,                          # fail fast on acquire
+            max_inactive_connection_lifetime=180, # drop idle conns before Supabase kills them
         )
         await _ensure_schema()
     return _pool
+
+
+@asynccontextmanager
+async def _acquire_conn(retries: int = 3):
+    """Async context manager that acquires a DB connection with retry.
+
+    Handles stale connections that accumulate when Render's free-tier
+    container sleeps — asyncpg InterfaceError / OSError on first use.
+    """
+    global _pool
+    if _pool is None:
+        raise RuntimeError("DB pool not initialized")
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            async with _pool.acquire() as conn:
+                yield conn
+                return
+        except (
+            asyncpg.InterfaceError,
+            asyncpg.TooManyConnectionsError,
+            OSError,
+        ) as exc:
+            last_exc = exc
+            logger.warning("DB acquire stale (attempt %d/%d): %s", attempt + 1, retries, exc)
+            if attempt < retries - 1:
+                await asyncio.sleep(0.4 * (attempt + 1))
+    raise last_exc  # type: ignore[misc]
 
 
 async def close_pool() -> None:
@@ -255,18 +287,12 @@ class _Collection:
         self.name = name
         self.table = _safe_table(name)
 
-    async def _conn(self):
-        if _pool is None:
-            raise RuntimeError("DB pool not initialized")
-        return _pool
-
     async def find_one(
         self, filter_: dict | None = None, projection: dict | None = None
     ) -> dict | None:
         where, params = _build_where(filter_)
         sql = f"SELECT doc FROM {self.table} {where} LIMIT 1"
-        pool = await self._conn()
-        async with pool.acquire() as c:
+        async with _acquire_conn() as c:
             row = await c.fetchrow(sql, *params)
         if not row:
             return None
@@ -297,8 +323,7 @@ class _Collection:
             order = "ORDER BY " + ", ".join(parts)
         lim = f"LIMIT {int(limit)}" if limit else ""
         sql = f"SELECT doc FROM {self.table} {where} {order} {lim}".strip()
-        pool = await self._conn()
-        async with pool.acquire() as c:
+        async with _acquire_conn() as c:
             rows = await c.fetch(sql, *params)
         out: list[dict] = []
         for r in rows:
@@ -311,18 +336,16 @@ class _Collection:
     async def count_documents(self, filter_: dict | None = None) -> int:
         where, params = _build_where(filter_)
         sql = f"SELECT COUNT(*) AS n FROM {self.table} {where}"
-        pool = await self._conn()
-        async with pool.acquire() as c:
+        async with _acquire_conn() as c:
             row = await c.fetchrow(sql, *params)
         return int(row["n"]) if row else 0
 
     async def insert_one(self, doc: dict) -> dict:
         if "id" not in doc:
             raise ValueError("doc must include 'id' field")
-        pool = await self._conn()
         payload = json.dumps(doc, default=str)
         sql = f"INSERT INTO {self.table} (id, doc) VALUES ($1, $2::jsonb)"
-        async with pool.acquire() as c:
+        async with _acquire_conn() as c:
             await c.execute(sql, doc["id"], payload)
         return doc
 
@@ -367,8 +390,7 @@ class _Collection:
             params.extend(where_params)
 
         sql = f"UPDATE {self.table} SET doc = {set_doc_expr} {where}"
-        pool = await self._conn()
-        async with pool.acquire() as c:
+        async with _acquire_conn() as c:
             res = await c.execute(sql, *params)
         # res like 'UPDATE N'
         try:
@@ -395,8 +417,7 @@ class _Collection:
     async def delete_one(self, filter_: dict) -> _UpdateResult:
         where, params = _build_where(filter_)
         sql = f"DELETE FROM {self.table} {where}"
-        pool = await self._conn()
-        async with pool.acquire() as c:
+        async with _acquire_conn() as c:
             res = await c.execute(sql, *params)
         try:
             n = int(res.rsplit(" ", 1)[1])

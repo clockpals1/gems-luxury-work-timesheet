@@ -11,7 +11,8 @@ from typing import Optional, Any
 import bcrypt
 import jwt
 from dotenv import load_dotenv
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, Form, Header, Query, Response
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, Header, Query, Response
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -43,6 +44,18 @@ JWT_ALG = "HS256"
 JWT_EXPIRES_MINUTES = int(os.environ.get("JWT_EXPIRES_MINUTES", "720"))
 
 app = FastAPI(title="Gems & Luxury Internal")
+
+
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all handler — ensures JSON 500 with CORS headers on every error."""
+    logger.exception("Unhandled error %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
 
 api = APIRouter(prefix="/api")
 bearer_scheme = HTTPBearer(auto_error=False)
