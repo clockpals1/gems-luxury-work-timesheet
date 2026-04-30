@@ -133,8 +133,8 @@ def _build_where(filter_: dict | None) -> tuple[str, list[Any]]:
     for field, cond in filter_.items():
         # use indexed `id` column for id lookups
         if field == "id" and _is_scalar(cond):
-            params.append(cond)
-            clauses.append(f"id = {_next()}")
+            params.append(str(cond) if cond is not None else cond)
+            clauses.append(f"id = {_next()}::text")
             continue
 
         col_text = f"doc->>'{field}'"
