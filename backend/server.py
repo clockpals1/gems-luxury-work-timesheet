@@ -1311,12 +1311,6 @@ async def seed():
     logger.info("seed complete")
 
 
-# ---------- Health ----------
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
-
-
 # ---------- Raw ASGI CORS middleware ----------
 class _CORSEverywhere:
     """Inject CORS headers on every HTTP response at the raw ASGI level.
@@ -1356,7 +1350,6 @@ class _CORSEverywhere:
 
 # ---------- App ----------
 app.include_router(api)
-app.add_middleware(_CORSEverywhere)
 
 
 _scheduler: AsyncIOScheduler | None = None
@@ -1388,3 +1381,8 @@ async def on_stop():
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+# Wrap the ENTIRE FastAPI stack (including Starlette's ServerErrorMiddleware)
+# so CORS headers appear on every response — including raw 500s.
+app = _CORSEverywhere(app)
