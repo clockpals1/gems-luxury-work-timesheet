@@ -1226,12 +1226,21 @@ async def seed():
     logger.info("seed complete")
 
 
+# ---------- Health ----------
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 # ---------- App ----------
+_extra_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+_cors_origins = _extra_origins or ["*"]
+
 app.include_router(api)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
