@@ -117,24 +117,40 @@ def _is_scalar(v: Any) -> bool:
     return isinstance(v, (str, int, float, bool)) or v is None
 
 
+def _pg_literal(val: Any) -> str:
+    """Encode a Python scalar as a safe PostgreSQL literal (no parameter binding).
+
+    Avoids asyncpg IndeterminateDatatypeError with Supavisor pooler by
+    embedding literals directly in the SQL rather than using $N placeholders.
+    """
+    if val is None:
+        return "NULL"
+    if isinstance(val, bool):
+        return "TRUE" if val else "FALSE"
+    if isinstance(val, int):
+        return str(val)
+    if isinstance(val, float):
+        return repr(val)
+    s = str(val).replace("\x00", "").replace("'", "''")
+    return f"'{s}'"
+
+
 def _build_where(filter_: dict | None) -> tuple[str, list[Any]]:
     """Translate a Mongo-style filter into a SQL WHERE clause.
 
-    Returns ("WHERE ..." or "", params).
+    Returns ("WHERE ..." or "", []).  All filter values are embedded as
+    safe SQL literals (via ``_pg_literal``) rather than ``$N`` placeholders
+    so the query never triggers asyncpg's IndeterminateDatatypeError when
+    running through the Supavisor connection pooler.
     """
     if not filter_:
         return "", []
     clauses: list[str] = []
-    params: list[Any] = []
-
-    def _next() -> str:
-        return f"${len(params) + 1}"
 
     for field, cond in filter_.items():
         # use indexed `id` column for id lookups
         if field == "id" and _is_scalar(cond):
-            params.append(str(cond) if cond is not None else cond)
-            clauses.append(f"id = {_next()}::text")
+            clauses.append(f"id = {_pg_literal(cond)}")
             continue
 
         col_text = f"doc->>'{field}'"
@@ -143,27 +159,23 @@ def _build_where(filter_: dict | None) -> tuple[str, list[Any]]:
             for op, val in cond.items():
                 if op == "$ne":
                     if isinstance(val, bool):
-                        params.append(val)
-                        clauses.append(f"({col_text})::boolean IS DISTINCT FROM {_next()}::boolean")
+                        clauses.append(f"({col_text})::boolean IS DISTINCT FROM {_pg_literal(val)}")
                     elif isinstance(val, (int, float)):
-                        params.append(val)
-                        clauses.append(f"({col_text})::numeric IS DISTINCT FROM {_next()}::numeric")
+                        clauses.append(f"({col_text})::numeric IS DISTINCT FROM {_pg_literal(val)}")
                     else:
-                        params.append(str(val) if val is not None else val)
-                        clauses.append(f"{col_text} IS DISTINCT FROM {_next()}::text")
+                        clauses.append(f"{col_text} IS DISTINCT FROM {_pg_literal(val)}")
                 elif op in ("$gte", "$gt", "$lte", "$lt"):
                     sym = {"$gte": ">=", "$gt": ">", "$lte": "<=", "$lt": "<"}[op]
                     if isinstance(val, (int, float)) and not isinstance(val, bool):
-                        params.append(val)
-                        clauses.append(f"({col_text})::numeric {sym} {_next()}::numeric")
+                        clauses.append(f"({col_text})::numeric {sym} {_pg_literal(val)}")
                     else:
-                        params.append(str(val))
-                        clauses.append(f"{col_text} {sym} {_next()}::text")
+                        clauses.append(f"{col_text} {sym} {_pg_literal(val)}")
                 elif op == "$in":
-                    arr = list(val)
-                    params.append(arr)
-                    # cast to text[] for string comparisons; works for our usage
-                    clauses.append(f"{col_text} = ANY({_next()}::text[])")
+                    if not val:
+                        clauses.append("FALSE")
+                    else:
+                        literals = ", ".join(_pg_literal(v) for v in val)
+                        clauses.append(f"{col_text} IN ({literals})")
                 elif op == "$exists":
                     if val:
                         clauses.append(f"doc ? '{field}'")
@@ -176,18 +188,15 @@ def _build_where(filter_: dict | None) -> tuple[str, list[Any]]:
             if cond is None:
                 clauses.append(f"({col_text} IS NULL)")
             elif isinstance(cond, bool):
-                params.append(cond)
-                clauses.append(f"({col_text})::boolean = {_next()}::boolean")
+                clauses.append(f"({col_text})::boolean = {_pg_literal(cond)}")
             elif isinstance(cond, (int, float)):
-                params.append(cond)
-                clauses.append(f"({col_text})::numeric = {_next()}::numeric")
+                clauses.append(f"({col_text})::numeric = {_pg_literal(cond)}")
             else:
-                params.append(str(cond))
-                clauses.append(f"{col_text} = {_next()}::text")
+                clauses.append(f"{col_text} = {_pg_literal(cond)}")
 
     if not clauses:
         return "", []
-    return "WHERE " + " AND ".join(clauses), params
+    return "WHERE " + " AND ".join(clauses), []
 
 
 def _apply_projection(doc: dict | None, projection: dict | None) -> dict | None:
