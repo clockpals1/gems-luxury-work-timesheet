@@ -48,12 +48,13 @@ app = FastAPI(title="Gems & Luxury Internal")
 
 @app.exception_handler(Exception)
 async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Catch-all handler — ensures JSON 500 with CORS headers on every error."""
+    """Catch-all handler — returns structured JSON 500. CORS headers are added
+    by _CORSEverywhere (outermost wrapper), so do NOT set them here to avoid
+    the duplicate-value '*, *' browser rejection."""
     logger.exception("Unhandled error %s %s: %s", request.method, request.url.path, exc)
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
-        headers={"Access-Control-Allow-Origin": "*"},
     )
 
 
@@ -1353,8 +1354,11 @@ class _CORSEverywhere:
         async def _send_cors(message):
             if message["type"] == "http.response.start":
                 hdrs = list(message.get("headers", []))
-                hdrs.append((b"access-control-allow-origin", b"*"))
-                hdrs.append((b"access-control-allow-headers", b"authorization, content-type, accept"))
+                existing = {k.lower() for k, _ in hdrs}
+                if b"access-control-allow-origin" not in existing:
+                    hdrs.append((b"access-control-allow-origin", b"*"))
+                if b"access-control-allow-headers" not in existing:
+                    hdrs.append((b"access-control-allow-headers", b"authorization, content-type, accept"))
                 message = {**message, "headers": hdrs}
             await send(message)
 
