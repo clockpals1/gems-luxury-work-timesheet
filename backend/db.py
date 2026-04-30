@@ -56,7 +56,14 @@ def _safe_table(name: str) -> str:
 async def init_pool(dsn: str) -> asyncpg.Pool:
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=10, statement_cache_size=0)
+        _pool = await asyncpg.create_pool(
+            dsn=dsn,
+            min_size=1,
+            max_size=10,
+            statement_cache_size=0,  # required for Supavisor transaction/session pooler
+            ssl="require",           # Supabase pooler enforces SSL
+            command_timeout=30,
+        )
         await _ensure_schema()
     return _pool
 

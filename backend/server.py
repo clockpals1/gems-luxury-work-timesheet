@@ -33,6 +33,11 @@ logger = logging.getLogger("gems")
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL (Supabase Postgres URI) must be set")
+if DATABASE_URL.startswith("http://") or DATABASE_URL.startswith("https://"):
+    raise RuntimeError(
+        "DATABASE_URL must be a PostgreSQL connection string (postgresql://...), "
+        "not an HTTP URL. Go to Supabase → Settings → Database → Connection string → URI."
+    )
 
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
