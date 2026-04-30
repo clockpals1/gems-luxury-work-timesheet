@@ -13,13 +13,13 @@ import jwt
 from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, Form, Header, Query, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from starlette.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import storage
 import ai_service
+from db import db, init_pool, close_pool
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -28,9 +28,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("gems")
 
 # ---------- DB ----------
-mongo_url = os.environ["MONGO_URL"]
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ["DB_NAME"]]
+# Supabase Postgres connection string (from Supabase → Project Settings → Database).
+# Use the "Connection Pooling" (pgbouncer) URI in production for best results.
+DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("SUPABASE_DB_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL (Supabase Postgres URI) must be set")
 
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
@@ -1221,12 +1223,8 @@ _scheduler: AsyncIOScheduler | None = None
 @app.on_event("startup")
 async def on_start():
     global _scheduler
-    # Storage initialization is now done in worker.py with R2 bucket binding
-    # storage.init_storage() is called with the bucket from env
+    await init_pool(DATABASE_URL)
     await seed()
-    # Note: APScheduler is disabled for Cloudflare Workers
-    # Scheduled tasks are handled by Cloudflare Cron Triggers in scheduled_worker.py
-    # The scheduler code is kept for local development with uvicorn
     try:
         _scheduler = AsyncIOScheduler(timezone="UTC")
         _scheduler.add_job(auto_punch_out_sweep, "interval", minutes=2, id="auto_punch_out", coalesce=True, max_instances=1)
@@ -1242,4 +1240,9 @@ async def on_stop():
     if _scheduler:
         try: _scheduler.shutdown(wait=False)
         except Exception: pass
-    client.close()
+    await close_pool()
+
+
+@app.get("/health")
+async def health() -> dict:
+    return {"status": "ok"}

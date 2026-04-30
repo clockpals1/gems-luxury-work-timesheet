@@ -1,13 +1,15 @@
 name: Deploy Frontend to Cloudflare Pages
 
-# DISABLED - Using Cloudflare Pages Git integration instead
-# This workflow is disabled in favor of Cloudflare's direct Git integration
-# which is simpler and more reliable
+# Builds the React app and deploys it to Cloudflare Pages using Wrangler.
+# Required GitHub secrets:
+#   CLOUDFLARE_API_TOKEN     - token with Pages:Edit permission
+#   CLOUDFLARE_ACCOUNT_ID    - your Cloudflare account ID
+#   REACT_APP_BACKEND_URL    - public URL of the Render backend, e.g.
+#                              https://gems-luxury-backend.onrender.com
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - 'frontend/**'
       - '.github/workflows/deploy-frontend.yml'
@@ -16,9 +18,10 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    name: Deploy to Cloudflare Pages
-    if: false  # Disabled - using Cloudflare Pages Git integration instead
-    
+    name: Build & deploy to Cloudflare Pages
+    permissions:
+      contents: read
+      deployments: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,21 +30,23 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'yarn'
+          cache-dependency-path: frontend/yarn.lock
 
       - name: Install dependencies
         working-directory: ./frontend
-        run: npm install
+        run: yarn install --frozen-lockfile || yarn install
 
       - name: Build frontend
         working-directory: ./frontend
         env:
           REACT_APP_BACKEND_URL: ${{ secrets.REACT_APP_BACKEND_URL }}
-        run: npm run build
-
-      - name: Install wrangler
-        run: npm install -g wrangler
+          CI: 'false'
+        run: yarn build
 
       - name: Deploy to Cloudflare Pages
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: wrangler pages deploy frontend/build --project-name=gems-luxury-frontend
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy frontend/build --project-name=gems-luxury-frontend --branch=main

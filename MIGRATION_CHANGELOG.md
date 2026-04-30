@@ -1,6 +1,63 @@
 # Migration Changelog
 
-## Summary
+## v2 — Supabase + Render re-engineering (current)
+
+The platform was re-engineered to remove every Emergent / Cloudflare R2 /
+MongoDB dependency. The current target stack is:
+
+- Frontend: **Cloudflare Pages** (unchanged)
+- Backend: **Render** (Docker, FastAPI / Python 3.11)
+- Database: **Supabase Postgres** (replaces MongoDB Atlas)
+- Storage: **Supabase Storage** (replaces Cloudflare R2)
+- AI text: **Anthropic Claude** via official `anthropic` SDK
+- AI images: **Google Gemini** via official `google-genai` SDK
+
+### Key code changes
+
+- `backend/db.py` — new asyncpg + JSONB adapter exposing the small
+  Mongo-compatible API (`find_one`, `find().sort().to_list()`,
+  `insert_one`, `update_one` with `$set`/`$inc`/`upsert`,
+  `count_documents`). Each Mongo "collection" is stored as a row in a
+  `gl_<collection>` JSONB table; the schema is auto-created on startup
+  and is also captured in `backend/sql/schema.sql`.
+- `backend/server.py` — swapped `motor.motor_asyncio.AsyncIOMotorClient`
+  for the new adapter. All other handler logic is unchanged. Added a
+  `/health` endpoint for Render.
+- `backend/storage.py` — rewritten to talk to the Supabase Storage REST
+  API directly via `httpx`. The Cloudflare R2 binding (which only worked
+  inside Workers) is gone.
+- `backend/ai_service.py` — Emergent integration removed. Now uses the
+  official Anthropic SDK for product-draft generation and the official
+  `google-genai` SDK for image enhance / alternate views.
+- `backend/requirements.txt` — pruned to the minimum: FastAPI, asyncpg,
+  httpx, anthropic, google-genai, apscheduler, rapidfuzz, bcrypt, PyJWT.
+  `motor`, `pymongo`, `boto3`, `emergentintegrations` are gone.
+- `backend/Dockerfile` — uses `$PORT` for Render compatibility.
+- `render.yaml` — Render Blueprint at the repo root provisions the
+  backend service and required env vars.
+- `.github/workflows/deploy-backend.yml` — replaced the GHCR + Cloudflare
+  Run pipeline with a simple Render deploy hook trigger.
+- `.github/workflows/deploy-frontend.yml` — re-enabled, builds the React
+  app and deploys to Cloudflare Pages with the official
+  `cloudflare/wrangler-action`.
+- `frontend/public/_redirects` — SPA fallback for Pages.
+- `frontend/package.json` — removed the `@emergentbase/visual-edits`
+  devDependency that pointed at a private tarball URL.
+- Removed dead Workers shims: `backend/worker.py`,
+  `backend/scheduled_worker.py`, `backend/wrangler.toml`.
+
+### Required GitHub secrets
+
+| Secret | Purpose |
+| --- | --- |
+| `RENDER_DEPLOY_HOOK_URL` | Triggers Render redeploy on backend push |
+| `CLOUDFLARE_API_TOKEN` | Pages: Edit token |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID |
+| `REACT_APP_BACKEND_URL` | Public Render backend URL baked into build |
+
+---
+
+## v1 — Hybrid Cloudflare architecture (historical)
 
 Migrated Gems & Luxury internal staff platform to a hybrid Cloudflare architecture:
 - Frontend: Cloudflare Pages

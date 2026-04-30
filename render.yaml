@@ -1,0 +1,35 @@
+# Render Blueprint — provisions the FastAPI backend as a Docker web service.
+# Apply by clicking "New → Blueprint" in Render and pointing at this repo,
+# or run `render blueprint launch` with the Render CLI.
+services:
+  - type: web
+    name: gems-luxury-backend
+    env: docker
+    plan: starter
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: gems-luxury
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_MINUTES
+        value: "720"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: APP_NAME
+        value: gemsluxury
+      - key: PUBLIC_BACKEND_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false

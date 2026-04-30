@@ -1,28 +1,31 @@
-"""AI helpers — Claude Sonnet 4.5 (text) + Gemini Nano Banana (images).
+"""AI helpers — Anthropic Claude (text) + Google Gemini (images).
 
-Prompts are read from MongoDB collection `prompt_templates` (seeded on startup).
-Includes fuzzy duplicate-name detection with retry.
+Reads prompts from the ``prompt_templates`` collection (seeded on startup).
+Includes fuzzy duplicate-name detection with retry. Uses official Anthropic
+and Google ``google-genai`` SDKs directly. The previous Emergent integration
+has been removed.
 
-NOTE: Emergent LLM integration disabled - emergentintegrations package not available.
-AI functionality using Emergent services will return errors.
+Environment variables:
+    ANTHROPIC_API_KEY  - required for product-draft generation
+    GEMINI_API_KEY     - required for image enhance / alternates
 """
-import os
-import json
+from __future__ import annotations
+
+import asyncio
 import base64
+import json
 import logging
-import random
+import os
 import re
 import uuid
-from typing import Optional, Any
+from typing import Any, Optional
 
-# from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
-# Emergent integration disabled - package not available on public PyPI
 from rapidfuzz import fuzz
 
 logger = logging.getLogger(__name__)
 
 CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
-NANO_BANANA_MODEL = "gemini-3.1-flash-image-preview"
+GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image-preview"
 
 # Prompt template keys
 PT_PRODUCT_DRAFT = "product_draft"
@@ -30,37 +33,38 @@ PT_IMAGE_ENHANCE = "image_enhance"
 PT_IMAGE_ALTERNATE = "image_alternate"
 
 
-def _api_key() -> str:
-    key = os.environ.get("EMERGENT_LLM_KEY")
+def _anthropic_key() -> str:
+    key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
-        raise RuntimeError("EMERGENT_LLM_KEY not set")
+        raise RuntimeError("ANTHROPIC_API_KEY not set")
     return key
 
 
-def _emergent_available() -> bool:
-    """Check if Emergent LLM integration is available."""
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
-        return True
-    except ImportError:
-        logger.warning("Emergent LLM integration not available - AI features disabled")
-        return False
+def _gemini_key() -> str:
+    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    return key
 
 
 def _extract_json(text: str) -> dict:
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if m:
-        try: return json.loads(m.group(1))
-        except Exception: pass
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            pass
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if m:
-        try: return json.loads(m.group(0))
-        except Exception: pass
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
     raise ValueError("No JSON in response")
 
 
 def fmt(template: str, **kwargs: Any) -> str:
-    """Safe template substitution — replaces {{key}} placeholders."""
+    """Safe template substitution — replaces ``{{key}}`` placeholders."""
     out = template
     for k, v in kwargs.items():
         out = out.replace("{{" + k + "}}", str(v))
@@ -68,12 +72,12 @@ def fmt(template: str, **kwargs: Any) -> str:
 
 
 def is_duplicate(name: str, existing: list[str], threshold: int = 85) -> Optional[str]:
-    """Return the matching existing name if `name` is too similar, else None."""
     if not name:
         return None
     name_n = name.strip().lower()
     for e in existing:
-        if not e: continue
+        if not e:
+            continue
         ratio = fuzz.token_set_ratio(name_n, e.strip().lower())
         if ratio >= threshold:
             return e
@@ -85,6 +89,31 @@ async def _get_template(db, key: str) -> dict:
     if not tpl:
         raise RuntimeError(f"Prompt template '{key}' not found")
     return tpl
+
+
+# ---------------------------------------------------------------------------
+# Text generation (Anthropic)
+# ---------------------------------------------------------------------------
+
+async def _claude_complete(system: str, prompt: str, model: str) -> str:
+    """Call Anthropic Messages API and return the assistant text."""
+    try:
+        from anthropic import AsyncAnthropic
+    except ImportError as e:  # pragma: no cover
+        raise RuntimeError("anthropic package not installed") from e
+
+    client = AsyncAnthropic(api_key=_anthropic_key())
+    msg = await client.messages.create(
+        model=model or CLAUDE_MODEL,
+        max_tokens=1024,
+        system=system,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    parts = []
+    for block in msg.content:
+        if getattr(block, "type", None) == "text":
+            parts.append(block.text)
+    return "".join(parts).strip()
 
 
 async def generate_product_draft(
@@ -112,8 +141,10 @@ async def generate_product_draft(
     category_mult = (pricing_rules.get("category_multipliers") or {}).get(category, 1.0)
 
     image_hint_parts = []
-    if image_description: image_hint_parts.append(f"Source image description: {image_description}")
-    if image_tags: image_hint_parts.append(f"Image tags: {', '.join(image_tags)}")
+    if image_description:
+        image_hint_parts.append(f"Source image description: {image_description}")
+    if image_tags:
+        image_hint_parts.append(f"Image tags: {', '.join(image_tags)}")
     image_hint = "\n".join(image_hint_parts)
 
     existing_names = existing_names or []
@@ -138,31 +169,29 @@ async def generate_product_draft(
             avoid_names="; ".join(existing_names[:30]) + avoid_section,
         )
 
-        chat = LlmChat(
-            api_key=_api_key(),
-            session_id=f"product-gen-{uuid.uuid4()}",
-            system_message=tpl["system_prompt"],
-        ).with_model(tpl.get("model_provider", "anthropic"), tpl.get("model_name", CLAUDE_MODEL))
-
         try:
-            resp = await chat.send_message(UserMessage(text=prompt))
-            draft = _extract_json(resp)
+            text = await _claude_complete(
+                tpl["system_prompt"], prompt, tpl.get("model_name", CLAUDE_MODEL)
+            )
+            draft = _extract_json(text)
         except Exception as e:
             logger.exception("AI draft attempt %d failed: %s", attempt, e)
             continue
 
-        # Duplicate check
         dup = is_duplicate(draft.get("productName", ""), existing_names)
         if dup and attempt < max_retries:
             avoid = (avoid + "; " if avoid else "") + dup
-            logger.info("duplicate name '%s' similar to '%s' — retrying", draft.get("productName"), dup)
+            logger.info(
+                "duplicate name '%s' similar to '%s' — retrying",
+                draft.get("productName"),
+                dup,
+            )
             continue
         break
 
     if not draft:
         raise RuntimeError("AI generation failed")
 
-    # Clamp price defensively.
     try:
         price = int(draft.get("finalPrice", min_price))
     except Exception:
@@ -173,48 +202,74 @@ async def generate_product_draft(
     return draft
 
 
+# ---------------------------------------------------------------------------
+# Image generation (Google Gemini)
+# ---------------------------------------------------------------------------
+
+def _gemini_image_call(system: str, prompt: str, image_bytes: bytes, model: str) -> Optional[bytes]:
+    """Synchronous Gemini call; run in a thread from async code."""
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError as e:  # pragma: no cover
+        raise RuntimeError("google-genai package not installed") from e
+
+    client = genai.Client(api_key=_gemini_key())
+    image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/png")
+    contents = [system + "\n\n" + prompt, image_part]
+    resp = client.models.generate_content(
+        model=model or GEMINI_IMAGE_MODEL,
+        contents=contents,
+        config=types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"]),
+    )
+    for cand in getattr(resp, "candidates", []) or []:
+        content = getattr(cand, "content", None)
+        if not content:
+            continue
+        for part in getattr(content, "parts", []) or []:
+            inline = getattr(part, "inline_data", None)
+            if inline and getattr(inline, "data", None):
+                data = inline.data
+                if isinstance(data, str):
+                    return base64.b64decode(data)
+                return bytes(data)
+    return None
+
+
 async def enhance_image(db, image_bytes: bytes) -> Optional[bytes]:
     tpl = await _get_template(db, PT_IMAGE_ENHANCE)
-    b64 = base64.b64encode(image_bytes).decode("utf-8")
-    chat = LlmChat(
-        api_key=_api_key(),
-        session_id=f"img-enhance-{uuid.uuid4()}",
-        system_message=tpl["system_prompt"],
-    ).with_model(tpl.get("model_provider", "gemini"), tpl.get("model_name", NANO_BANANA_MODEL)).with_params(modalities=["image", "text"])
-
-    msg = UserMessage(text=tpl["user_prompt_template"], file_contents=[ImageContent(b64)])
     try:
-        _text, images = await chat.send_message_multimodal_response(msg)
+        return await asyncio.to_thread(
+            _gemini_image_call,
+            tpl["system_prompt"],
+            tpl["user_prompt_template"],
+            image_bytes,
+            tpl.get("model_name", GEMINI_IMAGE_MODEL),
+        )
     except Exception as e:
         logger.exception("enhance_image failed: %s", e)
         return None
-    if not images:
-        return None
-    return base64.b64decode(images[0]["data"])
 
 
 async def generate_alternate_view(db, image_bytes: bytes, view: str) -> Optional[bytes]:
     tpl = await _get_template(db, PT_IMAGE_ALTERNATE)
-    b64 = base64.b64encode(image_bytes).decode("utf-8")
-    chat = LlmChat(
-        api_key=_api_key(),
-        session_id=f"img-alt-{uuid.uuid4()}",
-        system_message=tpl["system_prompt"],
-    ).with_model(tpl.get("model_provider", "gemini"), tpl.get("model_name", NANO_BANANA_MODEL)).with_params(modalities=["image", "text"])
-
     prompt = fmt(tpl["user_prompt_template"], view=view)
-    msg = UserMessage(text=prompt, file_contents=[ImageContent(b64)])
     try:
-        _text, images = await chat.send_message_multimodal_response(msg)
+        return await asyncio.to_thread(
+            _gemini_image_call,
+            tpl["system_prompt"],
+            prompt,
+            image_bytes,
+            tpl.get("model_name", GEMINI_IMAGE_MODEL),
+        )
     except Exception as e:
         logger.exception("generate_alternate_view failed: %s", e)
         return None
-    if not images:
-        return None
-    return base64.b64decode(images[0]["data"])
 
 
+# ---------------------------------------------------------------------------
 # Default seed prompts — only inserted if collection empty.
+# ---------------------------------------------------------------------------
 DEFAULT_PROMPTS = [
     {
         "key": PT_PRODUCT_DRAFT,
@@ -267,7 +322,7 @@ DEFAULT_PROMPTS = [
         "name": "Image cleanup & enhance",
         "description": "Cleans background and improves lighting on product photos.",
         "model_provider": "gemini",
-        "model_name": NANO_BANANA_MODEL,
+        "model_name": GEMINI_IMAGE_MODEL,
         "system_prompt": "You are an expert product photo editor for a luxury fashion catalog.",
         "user_prompt_template": (
             "Take this product photo for a premium African luxury fashion catalog and "
@@ -282,7 +337,7 @@ DEFAULT_PROMPTS = [
         "name": "Alternate-view generator",
         "description": "Generates an alternate-angle product photo from a reference.",
         "model_provider": "gemini",
-        "model_name": NANO_BANANA_MODEL,
+        "model_name": GEMINI_IMAGE_MODEL,
         "system_prompt": "You are an expert product photo editor for a luxury fashion catalog.",
         "user_prompt_template": (
             "Create an alternate catalog photograph of the same garment shown here. "
