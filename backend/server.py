@@ -44,6 +44,15 @@ JWT_ALG = "HS256"
 JWT_EXPIRES_MINUTES = int(os.environ.get("JWT_EXPIRES_MINUTES", "720"))
 
 app = FastAPI(title="Gems & Luxury Internal")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 api = APIRouter(prefix="/api")
 bearer_scheme = HTTPBearer(auto_error=False)
 
