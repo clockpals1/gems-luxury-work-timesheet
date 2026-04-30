@@ -38,7 +38,7 @@ jobs:
       - name: Build frontend
         working-directory: ./frontend
         env:
-          REACT_APP_BACKEND_URL: ${{ secrets.REACT_APP_BACKEND_URL }}
+          REACT_APP_BACKEND_URL: https://gems-luxury-backend.onrender.com
           CI: 'false'
         run: npm run build
 
