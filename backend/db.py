@@ -20,7 +20,6 @@ import re
 from typing import Any, Iterable, Optional
 
 import asyncio
-from contextlib import asynccontextmanager
 import asyncpg
 
 logger = logging.getLogger(__name__)
@@ -72,32 +71,50 @@ async def init_pool(dsn: str) -> asyncpg.Pool:
     return _pool
 
 
-@asynccontextmanager
-async def _acquire_conn(retries: int = 3):
-    """Async context manager that acquires a DB connection with retry.
+class _AcquireConn:
+    """Class-based async context manager with retry on stale connections.
 
-    Handles stale connections that accumulate when Render's free-tier
-    container sleeps — asyncpg InterfaceError / OSError on first use.
+    asynccontextmanager + retry loop causes a double-yield RuntimeError when
+    exceptions occur inside the with block.  A class-based CM avoids this.
     """
-    global _pool
-    if _pool is None:
-        raise RuntimeError("DB pool not initialized")
-    last_exc: Exception | None = None
-    for attempt in range(retries):
-        try:
-            async with _pool.acquire() as conn:
-                yield conn
-                return
-        except (
-            asyncpg.InterfaceError,
-            asyncpg.TooManyConnectionsError,
-            OSError,
-        ) as exc:
-            last_exc = exc
-            logger.warning("DB acquire stale (attempt %d/%d): %s", attempt + 1, retries, exc)
-            if attempt < retries - 1:
-                await asyncio.sleep(0.4 * (attempt + 1))
-    raise last_exc  # type: ignore[misc]
+    __slots__ = ("_retries", "_conn")
+
+    def __init__(self, retries: int = 3) -> None:
+        self._retries = retries
+        self._conn: Any = None
+
+    async def __aenter__(self):
+        global _pool
+        if _pool is None:
+            raise RuntimeError("DB pool not initialized")
+        last_exc: Exception | None = None
+        for attempt in range(self._retries):
+            try:
+                self._conn = await _pool.acquire()
+                return self._conn
+            except (
+                asyncpg.InterfaceError,
+                asyncpg.TooManyConnectionsError,
+                OSError,
+            ) as exc:
+                last_exc = exc
+                logger.warning(
+                    "DB acquire stale (attempt %d/%d): %s", attempt + 1, self._retries, exc
+                )
+                if attempt < self._retries - 1:
+                    await asyncio.sleep(0.4 * (attempt + 1))
+        raise last_exc  # type: ignore[misc]
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._conn is not None and _pool is not None:
+            await _pool.release(self._conn)
+            self._conn = None
+        return False
+
+
+def _acquire_conn(retries: int = 3) -> _AcquireConn:
+    """Return a retrying async context manager for a pool connection."""
+    return _AcquireConn(retries)
 
 
 async def close_pool() -> None:

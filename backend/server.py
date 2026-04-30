@@ -1393,7 +1393,7 @@ async def on_stop():
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "deploy_version": "v4-cors-triple-layer"}
 
 
 # Wrap the ENTIRE FastAPI stack (including Starlette's ServerErrorMiddleware)
