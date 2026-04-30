@@ -25,8 +25,11 @@ jobs:
           HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
         run: |
           if [ -z "$HOOK_URL" ]; then
-            echo "RENDER_DEPLOY_HOOK_URL secret is not set; skipping."
-            exit 0
+            echo "ERROR: RENDER_DEPLOY_HOOK_URL secret is not set."
+            echo "Go to: Render dashboard → gems-luxury-backend → Settings → Deploy Hook"
+            echo "Copy the URL and add it as RENDER_DEPLOY_HOOK_URL in GitHub repo secrets."
+            exit 1
           fi
+          echo "Triggering Render deploy..."
           curl -fsSL -X POST "$HOOK_URL"
-          echo "Render deploy triggered."
+          echo "Render deploy triggered successfully."
