@@ -90,21 +90,21 @@ async def _ensure_schema() -> None:
             )
         # Helpful indexes for hot paths
         helpful_indexes = [
-            ("gl_users", "email", "(doc->>'email')"),
-            ("gl_attendance_logs", "user_id", "(doc->>'user_id')"),
-            ("gl_attendance_logs", "punch_out", "(doc->>'punch_out')"),
-            ("gl_break_logs", "attendance_id", "(doc->>'attendance_id')"),
-            ("gl_break_logs", "end", "((doc->>'end'))"),
-            ("gl_generated_products", "generated_by_user_id", "(doc->>'generated_by_user_id')"),
-            ("gl_generated_products", "generated_at", "(doc->>'generated_at')"),
-            ("gl_image_assets", "status", "(doc->>'status')"),
-            ("gl_activity_logs", "timestamp", "(doc->>'timestamp')"),
-            ("gl_prompt_templates", "key", "(doc->>'key')"),
+            ("gl_users", "email", "doc->>'email'"),
+            ("gl_attendance_logs", "user_id", "doc->>'user_id'"),
+            ("gl_attendance_logs", "punch_out", "doc->>'punch_out'"),
+            ("gl_break_logs", "attendance_id", "doc->>'attendance_id'"),
+            ("gl_break_logs", "end", "doc->>'end'"),
+            ("gl_generated_products", "generated_by_user_id", "doc->>'generated_by_user_id'"),
+            ("gl_generated_products", "generated_at", "doc->>'generated_at'"),
+            ("gl_image_assets", "status", "doc->>'status'"),
+            ("gl_activity_logs", "timestamp", "doc->>'timestamp'"),
+            ("gl_prompt_templates", "key", "doc->>'key'"),
         ]
         for tbl, col, expr in helpful_indexes:
             idx = f"idx_{tbl}_{col}"
             try:
-                await conn.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON {tbl} {expr};")
+                await conn.execute(f"CREATE INDEX IF NOT EXISTS {idx} ON {tbl} (({expr}));")
             except Exception as e:  # pragma: no cover - non-fatal
                 logger.warning("index %s create failed: %s", idx, e)
 
@@ -144,21 +144,21 @@ def _build_where(filter_: dict | None) -> tuple[str, list[Any]]:
                 if op == "$ne":
                     if isinstance(val, bool):
                         params.append(val)
-                        clauses.append(f"({col_text})::boolean IS DISTINCT FROM {_next()}")
+                        clauses.append(f"({col_text})::boolean IS DISTINCT FROM {_next()}::boolean")
                     elif isinstance(val, (int, float)):
                         params.append(val)
-                        clauses.append(f"({col_text})::numeric IS DISTINCT FROM {_next()}")
+                        clauses.append(f"({col_text})::numeric IS DISTINCT FROM {_next()}::numeric")
                     else:
-                        params.append(val)
-                        clauses.append(f"{col_text} IS DISTINCT FROM {_next()}")
+                        params.append(str(val) if val is not None else val)
+                        clauses.append(f"{col_text} IS DISTINCT FROM {_next()}::text")
                 elif op in ("$gte", "$gt", "$lte", "$lt"):
                     sym = {"$gte": ">=", "$gt": ">", "$lte": "<=", "$lt": "<"}[op]
                     if isinstance(val, (int, float)) and not isinstance(val, bool):
                         params.append(val)
-                        clauses.append(f"({col_text})::numeric {sym} {_next()}")
+                        clauses.append(f"({col_text})::numeric {sym} {_next()}::numeric")
                     else:
-                        params.append(val)
-                        clauses.append(f"{col_text} {sym} {_next()}")
+                        params.append(str(val))
+                        clauses.append(f"{col_text} {sym} {_next()}::text")
                 elif op == "$in":
                     arr = list(val)
                     params.append(arr)
@@ -177,13 +177,13 @@ def _build_where(filter_: dict | None) -> tuple[str, list[Any]]:
                 clauses.append(f"({col_text} IS NULL)")
             elif isinstance(cond, bool):
                 params.append(cond)
-                clauses.append(f"({col_text})::boolean = {_next()}")
+                clauses.append(f"({col_text})::boolean = {_next()}::boolean")
             elif isinstance(cond, (int, float)):
                 params.append(cond)
-                clauses.append(f"({col_text})::numeric = {_next()}")
+                clauses.append(f"({col_text})::numeric = {_next()}::numeric")
             else:
-                params.append(cond)
-                clauses.append(f"{col_text} = {_next()}")
+                params.append(str(cond))
+                clauses.append(f"{col_text} = {_next()}::text")
 
     if not clauses:
         return "", []
