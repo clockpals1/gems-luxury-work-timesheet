@@ -30,19 +30,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'yarn'
-          cache-dependency-path: frontend/yarn.lock
 
       - name: Install dependencies
         working-directory: ./frontend
-        run: yarn install --frozen-lockfile || yarn install
+        run: npm install --legacy-peer-deps
 
       - name: Build frontend
         working-directory: ./frontend
         env:
           REACT_APP_BACKEND_URL: ${{ secrets.REACT_APP_BACKEND_URL }}
           CI: 'false'
-        run: yarn build
+        run: npm run build
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
