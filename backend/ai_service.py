@@ -1,13 +1,13 @@
-"""AI helpers — Anthropic Claude (text) + Google Gemini (images).
+"""AI helpers — Anthropic Claude (text) + Google Gemini (images) + HuggingFace (free).
 
 Reads prompts from the ``prompt_templates`` collection (seeded on startup).
-Includes fuzzy duplicate-name detection with retry. Uses official Anthropic
-and Google ``google-genai`` SDKs directly. The previous Emergent integration
-has been removed.
+Includes fuzzy duplicate-name detection with retry.
 
 Environment variables:
-    ANTHROPIC_API_KEY  - required for product-draft generation
-    GEMINI_API_KEY     - required for image enhance / alternates
+    ANTHROPIC_API_KEY    - required for product-draft generation
+    GEMINI_API_KEY       - required for image enhance / alternates (Gemini)
+    HUGGINGFACE_API_KEY  - optional free-tier HuggingFace Inference API key
+                           (works without key on public models, with rate limits)
 """
 from __future__ import annotations
 
@@ -27,10 +27,15 @@ logger = logging.getLogger(__name__)
 CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
 GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image-preview"
 
+# HuggingFace free-tier models
+HF_TXT2IMG_MODEL = "black-forest-labs/FLUX.1-schnell"  # best free text-to-image
+HF_IMG2IMG_MODEL = "timbrooks/instruct-pix2pix"         # free image-to-image
+
 # Prompt template keys
 PT_PRODUCT_DRAFT = "product_draft"
 PT_IMAGE_ENHANCE = "image_enhance"
 PT_IMAGE_ALTERNATE = "image_alternate"
+PT_IMAGE_GENERATE = "image_generate"
 
 
 def _anthropic_key() -> str:
@@ -45,6 +50,11 @@ def _gemini_key() -> str:
     if not key:
         raise RuntimeError("GEMINI_API_KEY not set")
     return key
+
+
+def _hf_key() -> str | None:
+    """HuggingFace token — optional, improves rate limits but not required."""
+    return os.environ.get("HUGGINGFACE_API_KEY") or os.environ.get("HF_TOKEN")
 
 
 def _extract_json(text: str) -> dict:
@@ -268,9 +278,64 @@ async def generate_alternate_view(db, image_bytes: bytes, view: str) -> Optional
 
 
 # ---------------------------------------------------------------------------
+# HuggingFace image generation (free / open-source)
+# ---------------------------------------------------------------------------
+
+def _hf_text_to_image(prompt: str, model: str) -> bytes:
+    """Synchronous HuggingFace text-to-image call; run in a thread."""
+    try:
+        from huggingface_hub import InferenceClient
+        from io import BytesIO
+    except ImportError as e:
+        raise RuntimeError("huggingface_hub package not installed") from e
+    client = InferenceClient(model=model, token=_hf_key())
+    img = client.text_to_image(prompt)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _hf_image_to_image(image_bytes: bytes, prompt: str, model: str) -> bytes:
+    """Synchronous HuggingFace image-to-image call; run in a thread."""
+    try:
+        from huggingface_hub import InferenceClient
+        from PIL import Image
+        from io import BytesIO
+    except ImportError as e:
+        raise RuntimeError("huggingface_hub or Pillow not installed") from e
+    client = InferenceClient(model=model, token=_hf_key())
+    source = Image.open(BytesIO(image_bytes)).convert("RGB")
+    result = client.image_to_image(image=source, prompt=prompt)
+    buf = BytesIO()
+    result.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+async def generate_image_from_prompt(prompt: str) -> Optional[bytes]:
+    """Generate a new product image from text using HuggingFace FLUX (free)."""
+    model = os.environ.get("HF_TXT2IMG_MODEL", HF_TXT2IMG_MODEL)
+    try:
+        return await asyncio.to_thread(_hf_text_to_image, prompt, model)
+    except Exception as e:
+        logger.exception("generate_image_from_prompt failed: %s", e)
+        return None
+
+
+async def regenerate_image_variation(image_bytes: bytes, instruction: str) -> Optional[bytes]:
+    """Regenerate an image variation using HuggingFace instruct-pix2pix (free)."""
+    model = os.environ.get("HF_IMG2IMG_MODEL", HF_IMG2IMG_MODEL)
+    prompt = instruction or "luxury fashion product photo, clean studio background, editorial lighting"
+    try:
+        return await asyncio.to_thread(_hf_image_to_image, image_bytes, prompt, model)
+    except Exception as e:
+        logger.exception("regenerate_image_variation failed: %s", e)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Default seed prompts — only inserted if collection empty.
 # ---------------------------------------------------------------------------
-DEFAULT_PROMPTS = [
+DEFAULT_PROMPTS: list[dict] = [
     {
         "key": PT_PRODUCT_DRAFT,
         "name": "Product draft generator",

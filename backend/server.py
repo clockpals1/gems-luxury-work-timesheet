@@ -916,6 +916,84 @@ async def generate_alternates(image_id: str, user: dict = Depends(require_role("
     return {"variations": results}
 
 
+class GenerateImageIn(BaseModel):
+    prompt: str
+    category: Optional[str] = None
+
+
+class RegenerateImageIn(BaseModel):
+    instruction: Optional[str] = None
+
+
+@api.post("/admin/images/generate")
+async def generate_image_ep(body: GenerateImageIn, user: dict = Depends(require_role("admin", "manager"))):
+    """Generate a new product image from a text prompt using HuggingFace FLUX (free)."""
+    result = await ai_service.generate_image_from_prompt(body.prompt)
+    if not result:
+        raise HTTPException(500, "Image generation failed — check HUGGINGFACE_API_KEY or model availability")
+    path = storage.build_path(user["id"], "generated.png", kind="generated")
+    try:
+        storage.put_object(path, result, "image/png")
+    except Exception as e:
+        logger.exception("generate_image storage failed")
+        raise HTTPException(500, f"Storage error: {e}")
+    doc = {
+        "id": new_id(),
+        "storage_path": path,
+        "filename": "generated.png",
+        "content_type": "image/png",
+        "size": len(result),
+        "category": body.category,
+        "tags": ["generated", "ai", "huggingface"],
+        "description": body.prompt[:200],
+        "status": "available",
+        "assigned_count": 0,
+        "is_deleted": False,
+        "uploaded_by": user["id"],
+        "uploaded_at": iso(now_utc()),
+        "source": "ai_generated",
+    }
+    await db.image_assets.insert_one(doc)
+    doc.pop("_id", None)
+    await log_activity(user["id"], "image_generated", {"prompt": body.prompt[:100]}, "image", doc["id"])
+    return doc
+
+
+@api.post("/admin/images/{image_id}/regenerate")
+async def regenerate_image_ep(image_id: str, body: RegenerateImageIn, user: dict = Depends(require_role("admin", "manager"))):
+    """Regenerate a variation of an existing image using HuggingFace instruct-pix2pix (free)."""
+    asset = await db.image_assets.find_one({"id": image_id, "is_deleted": {"$ne": True}}, {"_id": 0})
+    if not asset:
+        raise HTTPException(404, "Not found")
+    try:
+        data, _ = storage.get_object(asset["storage_path"])
+    except Exception as e:
+        raise HTTPException(500, f"Could not load source image: {e}")
+    result = await ai_service.regenerate_image_variation(data, body.instruction or "")
+    if not result:
+        raise HTTPException(500, "Regeneration failed — check HUGGINGFACE_API_KEY or model availability")
+    path = storage.build_path(user["id"], f"regen-{asset.get('filename', 'image.png')}", kind="variations")
+    try:
+        storage.put_object(path, result, "image/png")
+    except Exception as e:
+        logger.exception("regenerate_image storage failed")
+        raise HTTPException(500, f"Storage error: {e}")
+    doc = {
+        "id": new_id(),
+        "source_image_id": image_id,
+        "storage_path": path,
+        "content_type": "image/png",
+        "kind": "regenerated",
+        "instruction": body.instruction,
+        "created_by": user["id"],
+        "created_at": iso(now_utc()),
+    }
+    await db.image_variations.insert_one(doc)
+    doc.pop("_id", None)
+    await log_activity(user["id"], "image_regenerated", {"source": image_id, "instruction": body.instruction}, "image_variation", doc["id"])
+    return doc
+
+
 # ---------- Admin dashboard ----------
 @api.get("/admin/dashboard/stats")
 async def dashboard_stats(user: dict = Depends(require_role("admin", "manager"))):

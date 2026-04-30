@@ -27,5 +27,12 @@ apscheduler==3.10.4
 anthropic==0.39.0
 google-genai==0.3.0
 
+# Storage — Cloudflare R2 (S3-compatible)
+boto3==1.35.93
+
+# AI — HuggingFace free-tier image generation
+huggingface_hub==0.27.1
+Pillow==10.4.0
+
 # Utilities
 RapidFuzz==3.10.0
