@@ -30,7 +30,7 @@ GEMINI_IMAGE_MODEL = "gemini-2.0-flash-exp"
 # HuggingFace free-tier models
 HF_TXT2IMG_MODEL = "black-forest-labs/FLUX.1-schnell"  # best free text-to-image
 HF_IMG2IMG_MODEL = "timbrooks/instruct-pix2pix"         # free image-to-image
-HF_TEXT_MODEL = "HuggingFaceH4/zephyr-7b-beta"   # free text generation (works on inference API)
+HF_TEXT_MODEL = "gpt2"   # basic model that works on free inference API
 
 # Prompt template keys
 PT_PRODUCT_DRAFT = "product_draft"
