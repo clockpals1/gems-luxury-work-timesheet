@@ -1031,7 +1031,7 @@ class RegenerateImageIn(BaseModel):
 @api.post("/admin/images/generate")
 async def generate_image_ep(body: GenerateImageIn, user: dict = Depends(require_role("admin", "manager"))):
     """Generate a new product image from a text prompt using HuggingFace FLUX (free)."""
-    result = await ai_service.generate_image_from_prompt(body.prompt)
+    result = await ai_service.generate_image_from_prompt(db, body.prompt)
     if not result:
         raise HTTPException(500, "Image generation failed — check HUGGINGFACE_API_KEY or model availability")
     path = storage.build_path(user["id"], "generated.png", kind="generated")
@@ -1076,7 +1076,7 @@ async def regenerate_image_ep(image_id: str, body: RegenerateImageIn, user: dict
         data, _ = await asyncio.to_thread(storage.get_object, asset["storage_path"])
     except Exception as e:
         raise HTTPException(500, f"Could not load source image: {e}")
-    result = await ai_service.regenerate_image_variation(data, body.instruction or "")
+    result = await ai_service.regenerate_image_variation(db, data, body.instruction or "")
     if not result:
         raise HTTPException(500, "Regeneration failed — check HUGGINGFACE_API_KEY or model availability")
     path = storage.build_path(user["id"], f"regen-{asset.get('filename', 'image.png')}", kind="variations")
@@ -1175,6 +1175,34 @@ async def force_punch_out(att_id: str, user: dict = Depends(require_role("admin"
     total = int((now - parse_utc_datetime(att["punch_in"])).total_seconds() // 60)
     await db.attendance_logs.update_one({"id": att_id}, {"$set": {"punch_out": iso(now), "total_minutes": total, "force_out_by": user["id"]}})
     await log_activity(user["id"], "force_punch_out", {"target_user": att["user_id"]}, "attendance", att_id)
+    return {"ok": True}
+
+
+@api.get("/admin/settings/ai")
+async def get_ai_settings(user: dict = Depends(require_role("admin"))):
+    settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0})
+    ai_settings = settings.get("ai", {}) if settings else {}
+    return ai_settings
+
+
+@api.patch("/admin/settings/ai")
+async def update_ai_settings(body: dict, user: dict = Depends(require_role("admin"))):
+    allowed = {
+        "text_provider": body.get("text_provider"),
+        "image_provider": body.get("image_provider"),
+        "anthropic_api_key": body.get("anthropic_api_key", ""),
+        "gemini_api_key": body.get("gemini_api_key", ""),
+        "huggingface_api_key": body.get("huggingface_api_key", ""),
+    }
+    update = {k: v for k, v in allowed.items() if v is not None}
+    if not update:
+        return {"ok": True}
+    await db.admin_settings.update_one(
+        {"id": "global"},
+        {"$set": {"ai": update, "updated_at": iso(now_utc())}},
+        upsert=True
+    )
+    await log_activity(user["id"], "ai_settings_updated", {"fields": list(update.keys())}, "settings", "global")
     return {"ok": True}
 
 
@@ -1371,6 +1399,13 @@ async def seed():
                 "max_break_minutes": 30,
                 "currency": "USD",
                 "features": {"ai_images": True, "alternates": True, "admin_pricing_reveal": True},
+                "ai": {
+                    "text_provider": "anthropic",  # anthropic, huggingface
+                    "image_provider": "huggingface",  # huggingface, gemini
+                    "anthropic_api_key": "",
+                    "gemini_api_key": "",
+                    "huggingface_api_key": "",
+                },
                 "created_at": iso(now_utc()),
             })
     except Exception as e:

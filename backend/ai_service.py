@@ -38,22 +38,42 @@ PT_IMAGE_ALTERNATE = "image_alternate"
 PT_IMAGE_GENERATE = "image_generate"
 
 
-def _anthropic_key() -> str:
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        raise RuntimeError("ANTHROPIC_API_KEY not set")
-    return key
+def _anthropic_key(db=None) -> str | None:
+    """Get Anthropic API key from admin settings or environment. Returns None if not set."""
+    if db:
+        try:
+            settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
+            if settings and settings.get("ai", {}).get("anthropic_api_key"):
+                return settings["ai"]["anthropic_api_key"]
+        except Exception:
+            pass
+    return os.environ.get("ANTHROPIC_API_KEY")
 
 
-def _gemini_key() -> str:
+def _gemini_key(db=None) -> str:
+    """Get Gemini API key from admin settings or environment."""
+    if db:
+        try:
+            settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
+            if settings and settings.get("ai", {}).get("gemini_api_key"):
+                return settings["ai"]["gemini_api_key"]
+        except Exception:
+            pass
     key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not key:
         raise RuntimeError("GEMINI_API_KEY not set")
     return key
 
 
-def _hf_key() -> str | None:
+def _hf_key(db=None) -> str | None:
     """HuggingFace token — optional, improves rate limits but not required."""
+    if db:
+        try:
+            settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
+            if settings and settings.get("ai", {}).get("huggingface_api_key"):
+                return settings["ai"]["huggingface_api_key"]
+        except Exception:
+            pass
     return os.environ.get("HUGGINGFACE_API_KEY") or os.environ.get("HF_TOKEN")
 
 
@@ -105,14 +125,17 @@ async def _get_template(db, key: str) -> dict:
 # Text generation (Anthropic)
 # ---------------------------------------------------------------------------
 
-async def _claude_complete(system: str, prompt: str, model: str) -> str:
+async def _claude_complete(db, system: str, prompt: str, model: str) -> str:
     """Call Anthropic Messages API and return the assistant text."""
     try:
         from anthropic import AsyncAnthropic
     except ImportError as e:  # pragma: no cover
         raise RuntimeError("anthropic package not installed") from e
 
-    client = AsyncAnthropic(api_key=_anthropic_key())
+    key = _anthropic_key(db)
+    if not key:
+        raise RuntimeError("ANTHROPIC_API_KEY not set. Configure it in Admin Settings → AI Settings or set as environment variable.")
+    client = AsyncAnthropic(api_key=key)
     msg = await client.messages.create(
         model=model or CLAUDE_MODEL,
         max_tokens=1024,
@@ -182,7 +205,7 @@ async def generate_product_draft(
 
         try:
             text = await _claude_complete(
-                tpl["system_prompt"], prompt, tpl.get("model_name", CLAUDE_MODEL)
+                db, tpl["system_prompt"], prompt, tpl.get("model_name", CLAUDE_MODEL)
             )
             draft = _extract_json(text)
         except Exception as e:
@@ -218,7 +241,7 @@ async def generate_product_draft(
 # Image generation (Google Gemini)
 # ---------------------------------------------------------------------------
 
-def _gemini_image_call(system: str, prompt: str, image_bytes: bytes, model: str) -> Optional[bytes]:
+def _gemini_image_call(db, system: str, prompt: str, image_bytes: bytes, model: str) -> Optional[bytes]:
     """Synchronous Gemini call; run in a thread from async code."""
     try:
         from google import genai
@@ -226,7 +249,7 @@ def _gemini_image_call(system: str, prompt: str, image_bytes: bytes, model: str)
     except ImportError as e:  # pragma: no cover
         raise RuntimeError("google-genai package not installed") from e
 
-    client = genai.Client(api_key=_gemini_key())
+    client = genai.Client(api_key=_gemini_key(db))
     image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/png")
     contents = [system + "\n\n" + prompt, image_part]
     resp = client.models.generate_content(
@@ -253,6 +276,7 @@ async def enhance_image(db, image_bytes: bytes) -> Optional[bytes]:
     try:
         return await asyncio.to_thread(
             _gemini_image_call,
+            db,
             tpl["system_prompt"],
             tpl["user_prompt_template"],
             image_bytes,
@@ -269,6 +293,7 @@ async def generate_alternate_view(db, image_bytes: bytes, view: str) -> Optional
     try:
         return await asyncio.to_thread(
             _gemini_image_call,
+            db,
             tpl["system_prompt"],
             prompt,
             image_bytes,
@@ -283,21 +308,21 @@ async def generate_alternate_view(db, image_bytes: bytes, view: str) -> Optional
 # HuggingFace image generation (free / open-source)
 # ---------------------------------------------------------------------------
 
-def _hf_text_to_image(prompt: str, model: str) -> bytes:
+def _hf_text_to_image(db, prompt: str, model: str) -> bytes:
     """Synchronous HuggingFace text-to-image call; run in a thread."""
     try:
         from huggingface_hub import InferenceClient
         from io import BytesIO
     except ImportError as e:
         raise RuntimeError("huggingface_hub package not installed") from e
-    client = InferenceClient(model=model, token=_hf_key())
+    client = InferenceClient(model=model, token=_hf_key(db))
     img = client.text_to_image(prompt)
     buf = BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
 
 
-def _hf_image_to_image(image_bytes: bytes, prompt: str, model: str) -> bytes:
+def _hf_image_to_image(db, image_bytes: bytes, prompt: str, model: str) -> bytes:
     """Synchronous HuggingFace image-to-image call; run in a thread."""
     try:
         from huggingface_hub import InferenceClient
@@ -305,7 +330,7 @@ def _hf_image_to_image(image_bytes: bytes, prompt: str, model: str) -> bytes:
         from io import BytesIO
     except ImportError as e:
         raise RuntimeError("huggingface_hub or Pillow not installed") from e
-    client = InferenceClient(model=model, token=_hf_key())
+    client = InferenceClient(model=model, token=_hf_key(db))
     source = Image.open(BytesIO(image_bytes)).convert("RGB")
     result = client.image_to_image(image=source, prompt=prompt)
     buf = BytesIO()
@@ -313,22 +338,22 @@ def _hf_image_to_image(image_bytes: bytes, prompt: str, model: str) -> bytes:
     return buf.getvalue()
 
 
-async def generate_image_from_prompt(prompt: str) -> Optional[bytes]:
+async def generate_image_from_prompt(db, prompt: str) -> Optional[bytes]:
     """Generate a new product image from text using HuggingFace FLUX (free)."""
     model = os.environ.get("HF_TXT2IMG_MODEL", HF_TXT2IMG_MODEL)
     try:
-        return await asyncio.to_thread(_hf_text_to_image, prompt, model)
+        return await asyncio.to_thread(_hf_text_to_image, db, prompt, model)
     except Exception as e:
         logger.exception("generate_image_from_prompt failed: %s", e)
         return None
 
 
-async def regenerate_image_variation(image_bytes: bytes, instruction: str) -> Optional[bytes]:
+async def regenerate_image_variation(db, image_bytes: bytes, instruction: str) -> Optional[bytes]:
     """Regenerate an image variation using HuggingFace instruct-pix2pix (free)."""
     model = os.environ.get("HF_IMG2IMG_MODEL", HF_IMG2IMG_MODEL)
     prompt = instruction or "luxury fashion product photo, clean studio background, editorial lighting"
     try:
-        return await asyncio.to_thread(_hf_image_to_image, image_bytes, prompt, model)
+        return await asyncio.to_thread(_hf_image_to_image, db, image_bytes, prompt, model)
     except Exception as e:
         logger.exception("regenerate_image_variation failed: %s", e)
         return None
