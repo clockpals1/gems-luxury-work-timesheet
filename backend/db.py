@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # Connection pool
 # ---------------------------------------------------------------------------
 _pool: Optional[asyncpg.Pool] = None
+_dsn: Optional[str] = None   # stored so pool can be rebuilt after total failure
 
 # Names of "collections" we need at startup so tables exist before first use.
 KNOWN_COLLECTIONS: list[str] = [
@@ -54,21 +55,52 @@ def _safe_table(name: str) -> str:
     return f"gl_{name}"
 
 
+async def _create_pool(dsn: str) -> asyncpg.Pool:
+    return await asyncpg.create_pool(
+        dsn=dsn,
+        min_size=1,
+        max_size=5,                          # stay within Supabase free-tier limits
+        statement_cache_size=0,              # required for Supavisor
+        ssl="require",
+        command_timeout=30,
+        timeout=15,                          # fail fast on acquire
+        max_inactive_connection_lifetime=180, # drop idle conns before Supabase kills them
+    )
+
+
+async def _reset_pool() -> None:
+    """Close the broken pool and create a fresh one (auto-recovery)."""
+    global _pool, _dsn
+    if not _dsn:
+        raise RuntimeError("Cannot reset pool: DSN not stored")
+    logger.warning("DB pool reset triggered — rebuilding connection pool")
+    if _pool is not None:
+        try:
+            await _pool.close()
+        except Exception:
+            pass
+        _pool = None
+    _pool = await _create_pool(_dsn)
+    logger.info("DB pool rebuilt successfully")
+
+
 async def init_pool(dsn: str) -> asyncpg.Pool:
-    global _pool
+    global _pool, _dsn
+    _dsn = dsn
     if _pool is None:
-        _pool = await asyncpg.create_pool(
-            dsn=dsn,
-            min_size=1,
-            max_size=5,                          # stay within Supabase free-tier limits
-            statement_cache_size=0,              # required for Supavisor
-            ssl="require",
-            command_timeout=30,
-            timeout=15,                          # fail fast on acquire
-            max_inactive_connection_lifetime=180, # drop idle conns before Supabase kills them
-        )
+        _pool = await _create_pool(dsn)
         await _ensure_schema()
     return _pool
+
+
+async def check_db() -> dict:
+    """Run a trivial query; return status dict for health checks."""
+    try:
+        async with _acquire_conn() as c:
+            val = await c.fetchval("SELECT 1")
+        return {"db": "ok", "ping": val}
+    except Exception as exc:
+        return {"db": "error", "detail": str(exc)}
 
 
 class _AcquireConn:
@@ -103,7 +135,15 @@ class _AcquireConn:
                 )
                 if attempt < self._retries - 1:
                     await asyncio.sleep(0.4 * (attempt + 1))
-        raise last_exc  # type: ignore[misc]
+        # All retries exhausted — attempt a full pool reset before giving up
+        try:
+            logger.warning("All acquire retries failed; attempting pool reset")
+            await _reset_pool()
+            self._conn = await _pool.acquire()  # type: ignore[union-attr]
+            return self._conn
+        except Exception as reset_exc:
+            logger.error("Pool reset also failed: %s", reset_exc)
+            raise last_exc  # type: ignore[misc]
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self._conn is not None and _pool is not None:

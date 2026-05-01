@@ -19,7 +19,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import storage
 import ai_service
-from db import db, init_pool, close_pool
+from db import db, init_pool, close_pool, check_db
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -1422,7 +1422,8 @@ async def on_stop():
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "deploy_version": "v4-cors-triple-layer"}
+    db_status = await check_db()
+    return {"status": "ok", "deploy_version": "v5-db-autoreset", **db_status}
 
 
 # Wrap the ENTIRE FastAPI stack (including Starlette's ServerErrorMiddleware)
