@@ -1427,6 +1427,7 @@ async def seed():
                 "ai": {
                     "text_provider": "huggingface",  # anthropic, huggingface
                     "image_provider": "huggingface",  # huggingface, gemini
+                    "huggingface_text_model": "meta-llama/Meta-Llama-3.1-8B-Instruct:fastest",
                     "anthropic_api_key": "",
                     "gemini_api_key": "",
                     "huggingface_api_key": "",

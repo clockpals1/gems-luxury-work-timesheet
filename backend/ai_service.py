@@ -30,7 +30,7 @@ GEMINI_IMAGE_MODEL = "gemini-2.0-flash-exp"
 # HuggingFace free-tier models
 HF_TXT2IMG_MODEL = "black-forest-labs/FLUX.1-schnell"  # best free text-to-image
 HF_IMG2IMG_MODEL = "timbrooks/instruct-pix2pix"         # free image-to-image
-HF_TEXT_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct:fastest"  # supported on Inference Providers
+HF_TEXT_MODEL_DEFAULT = "meta-llama/Meta-Llama-3.1-8B-Instruct:fastest"  # default model
 
 # Prompt template keys
 PT_PRODUCT_DRAFT = "product_draft"
@@ -258,7 +258,9 @@ async def generate_product_draft(
             else:
                 # Use HuggingFace for free tier
                 hf_prompt = f"{tpl['system_prompt']}\n\n{prompt}\n\nRespond with a single JSON object containing: productName, shortTitle, shortDescription, fullDescription, sizes, tags, finalPrice (number only)."
-                text = await _hf_text_generation_async(db, hf_prompt, HF_TEXT_MODEL)
+                # Get model from settings or use default
+                hf_model = (settings or {}).get("ai", {}).get("huggingface_text_model") or HF_TEXT_MODEL_DEFAULT
+                text = await _hf_text_generation_async(db, hf_prompt, hf_model)
             draft = _extract_json(text)
         except Exception as e:
             last_exc = e
