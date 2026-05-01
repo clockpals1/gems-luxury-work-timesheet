@@ -17,7 +17,6 @@ import json
 import logging
 import os
 import re
-import uuid
 from typing import Any, Optional
 
 from rapidfuzz import fuzz
@@ -28,9 +27,16 @@ CLAUDE_MODEL = "claude-3-5-sonnet-20241022"
 GEMINI_IMAGE_MODEL = "gemini-2.0-flash-exp"
 
 # HuggingFace free-tier models
-HF_TXT2IMG_MODEL = "black-forest-labs/FLUX.1-schnell"  # best free text-to-image
-HF_IMG2IMG_MODEL = "timbrooks/instruct-pix2pix"         # free image-to-image
-HF_TEXT_MODEL_DEFAULT = "gpt2"  # simple model that works on free tier without API key
+HF_TXT2IMG_MODEL = "black-forest-labs/FLUX.1-schnell"   # best free text-to-image
+HF_IMG2IMG_MODEL = "timbrooks/instruct-pix2pix"          # free image-to-image
+HF_TEXT_MODEL_DEFAULT = "meta-llama/Llama-3.2-3B-Instruct"  # reliable free-tier chat model
+
+# Ordered fallbacks for HuggingFace text (all support chat_completion on serverless)
+HF_TEXT_FALLBACKS = [
+    "meta-llama/Llama-3.2-3B-Instruct",
+    "mistralai/Mistral-7B-Instruct-v0.3",
+    "HuggingFaceH4/zephyr-7b-beta",
+]
 
 # Prompt template keys
 PT_PRODUCT_DRAFT = "product_draft"
@@ -39,8 +45,12 @@ PT_IMAGE_ALTERNATE = "image_alternate"
 PT_IMAGE_GENERATE = "image_generate"
 
 
+# ---------------------------------------------------------------------------
+# API key helpers
+# ---------------------------------------------------------------------------
+
 def _anthropic_key(db=None) -> str | None:
-    """Get Anthropic API key from admin settings or environment. Returns None if not set."""
+    """Get Anthropic API key from admin settings or environment."""
     if db:
         try:
             settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
@@ -52,7 +62,7 @@ def _anthropic_key(db=None) -> str | None:
 
 
 def _gemini_key(db=None) -> str | None:
-    """Get Gemini API key from admin settings or environment. Returns None if not set."""
+    """Get Gemini API key from admin settings or environment."""
     if db:
         try:
             settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
@@ -67,7 +77,7 @@ def _gemini_key(db=None) -> str | None:
 
 
 def _openrouter_key(db=None) -> str | None:
-    """Get OpenRouter API key from admin settings or environment. Returns None if not set."""
+    """Get OpenRouter API key from admin settings or environment."""
     if db:
         try:
             settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
@@ -79,7 +89,7 @@ def _openrouter_key(db=None) -> str | None:
 
 
 def _groq_key(db=None) -> str | None:
-    """Get Groq API key from admin settings or environment. Returns None if not set."""
+    """Get Groq API key from admin settings or environment."""
     if db:
         try:
             settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
@@ -101,6 +111,10 @@ async def _hf_key(db=None) -> str | None:
             pass
     return os.environ.get("HUGGINGFACE_API_KEY") or os.environ.get("HF_TOKEN")
 
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
 
 def _extract_json(text: str) -> dict:
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
@@ -147,98 +161,22 @@ async def _get_template(db, key: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Text generation (Anthropic and HuggingFace)
+# Text generation
 # ---------------------------------------------------------------------------
-
-
-async def _openrouter_text_generation(db, prompt: str, model: str) -> str:
-    """OpenRouter text generation using OpenAI-compatible API."""
-    try:
-        from openai import AsyncOpenAI
-    except ImportError as e:
-        raise RuntimeError("openai package not installed") from e
-    key = _openrouter_key(db)
-    if not key:
-        raise RuntimeError("OpenRouter API key is required. Add it in Admin Settings → AI Settings or set OPENROUTER_API_KEY environment variable.")
-    try:
-        client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=key)
-        completion = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=512
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        raise RuntimeError(f"OpenRouter API error: {e}")
-
-
-async def _groq_text_generation(db, prompt: str, model: str) -> str:
-    """Groq text generation using OpenAI-compatible API."""
-    try:
-        from openai import AsyncOpenAI
-    except ImportError as e:
-        raise RuntimeError("openai package not installed") from e
-    key = _groq_key(db)
-    if not key:
-        raise RuntimeError("Groq API key is required. Add it in Admin Settings → AI Settings or set GROQ_API_KEY environment variable.")
-    try:
-        client = AsyncOpenAI(base_url="https://api.groq.com/openai/v1", api_key=key)
-        completion = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=512
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        raise RuntimeError(f"Groq API error: {e}")
-
-
-async def _hf_text_generation(db, prompt: str, model: str) -> str:
-    """Synchronous HuggingFace text generation call using huggingface_hub InferenceClient for free tier."""
-    try:
-        from huggingface_hub import InferenceClient
-    except ImportError as e:
-        raise RuntimeError("huggingface_hub package not installed") from e
-    token = await _hf_key(db)
-    try:
-        # Use InferenceClient which supports free tier without API key for some models
-        client = InferenceClient(token=token)
-        response = client.text_generation(prompt, model=model, max_new_tokens=512)
-        return response
-    except Exception as e:
-        # If the model fails, try a fallback model
-        logger.warning("Primary model %s failed: %s, trying fallback", model, e)
-        fallback_models = ["gpt2", "distilgpt2", "facebook/opt-125m"]
-        for fallback in fallback_models:
-            try:
-                logger.info("Trying fallback model: %s", fallback)
-                response = client.text_generation(prompt, model=fallback, max_new_tokens=512)
-                logger.info("Fallback model %s succeeded", fallback)
-                return response
-            except Exception as fe:
-                logger.warning("Fallback model %s also failed: %s", fallback, fe)
-        # Provide more specific error messages
-        if "401" in str(e) or "Invalid username or password" in str(e):
-            raise RuntimeError(f"HuggingFace API key authentication failed. Try without an API key for free tier models, or verify your key is correct. Error: {e}")
-        if "404" in str(e) or "Not Found" in str(e):
-            raise RuntimeError(f"Model {model} not found. Try a different model like 'gpt2' or 'distilgpt2' for free tier. Error: {e}")
-        raise e
-
-
-async def _hf_text_generation_async(db, prompt: str, model: str) -> str:
-    """Async wrapper for HuggingFace text generation."""
-    return await _hf_text_generation(db, prompt, model)
 
 async def _claude_complete(db, system: str, prompt: str, model: str) -> str:
     """Call Anthropic Messages API and return the assistant text."""
     try:
         from anthropic import AsyncAnthropic
-    except ImportError as e:  # pragma: no cover
+    except ImportError as e:
         raise RuntimeError("anthropic package not installed") from e
 
     key = _anthropic_key(db)
     if not key:
-        raise RuntimeError("ANTHROPIC_API_KEY not set. Configure it in Admin Settings → AI Settings or set as environment variable.")
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY not set. Configure it in Admin Settings → AI Settings "
+            "or set as environment variable."
+        )
     client = AsyncAnthropic(api_key=key)
     msg = await client.messages.create(
         model=model or CLAUDE_MODEL,
@@ -252,6 +190,110 @@ async def _claude_complete(db, system: str, prompt: str, model: str) -> str:
             parts.append(block.text)
     return "".join(parts).strip()
 
+
+async def _openrouter_text_generation(db, prompt: str, model: str) -> str:
+    """OpenRouter text generation using OpenAI-compatible API."""
+    try:
+        from openai import AsyncOpenAI
+    except ImportError as e:
+        raise RuntimeError("openai package not installed") from e
+    key = _openrouter_key(db)
+    if not key:
+        raise RuntimeError(
+            "OpenRouter API key is required. Add it in Admin Settings → AI Settings "
+            "or set OPENROUTER_API_KEY environment variable."
+        )
+    client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=key)
+    try:
+        completion = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=512,
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        raise RuntimeError(f"OpenRouter API error: {e}") from e
+
+
+async def _groq_text_generation(db, prompt: str, model: str) -> str:
+    """Groq text generation using OpenAI-compatible API."""
+    try:
+        from openai import AsyncOpenAI
+    except ImportError as e:
+        raise RuntimeError("openai package not installed") from e
+    key = _groq_key(db)
+    if not key:
+        raise RuntimeError(
+            "Groq API key is required. Add it in Admin Settings → AI Settings "
+            "or set GROQ_API_KEY environment variable."
+        )
+    client = AsyncOpenAI(base_url="https://api.groq.com/openai/v1", api_key=key)
+    try:
+        completion = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=512,
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        raise RuntimeError(f"Groq API error: {e}") from e
+
+
+def _hf_chat_sync(token: str | None, prompt: str, models_to_try: list[str]) -> str:
+    """
+    Synchronous HuggingFace chat_completion call.
+
+    Uses the serverless /v1/chat/completions endpoint which is the actively
+    maintained free-tier path. The old text_generation() pipeline endpoint
+    no longer serves classic models (gpt2, distilgpt2, etc.) via serverless.
+    Run via asyncio.to_thread() from async callers.
+    """
+    try:
+        from huggingface_hub import InferenceClient
+    except ImportError as e:
+        raise RuntimeError("huggingface_hub package not installed") from e
+
+    client = InferenceClient(token=token)
+    last_exc: Exception | None = None
+
+    for model in models_to_try:
+        try:
+            response = client.chat_completion(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=512,
+            )
+            logger.info("HuggingFace model '%s' succeeded.", model)
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.warning("HuggingFace model '%s' failed: %s", model, e)
+            last_exc = e
+
+    # Surface a clear error after all models are exhausted
+    err_str = str(last_exc or "")
+    if "401" in err_str or "Invalid username" in err_str:
+        raise RuntimeError(
+            "HuggingFace authentication failed. Check your API key in Admin Settings. "
+            f"Error: {last_exc}"
+        )
+    raise RuntimeError(
+        f"All HuggingFace fallback models failed. Last error: {last_exc}"
+    )
+
+
+async def _hf_text_generation(db, prompt: str, model: str) -> str:
+    """Async HuggingFace text generation with automatic model fallback."""
+    token = await _hf_key(db)
+
+    # Build ordered list: requested model first, then remaining fallbacks
+    models_to_try = [model] + [m for m in HF_TEXT_FALLBACKS if m != model]
+
+    return await asyncio.to_thread(_hf_chat_sync, token, prompt, models_to_try)
+
+
+# ---------------------------------------------------------------------------
+# Product draft generation
+# ---------------------------------------------------------------------------
 
 async def generate_product_draft(
     *,
@@ -289,14 +331,17 @@ async def generate_product_draft(
     draft: dict = {}
     last_exc: Exception | None = None
 
-    # Check which provider to use
+    # Resolve provider from DB settings
     settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0})
     text_provider = (settings or {}).get("ai", {}).get("text_provider", "groq") if settings else "groq"
 
     for attempt in range(max_retries + 1):
         avoid_section = ""
         if avoid:
-            avoid_section = f"\nIMPORTANT: avoid these names entirely (too similar already exists): {avoid}"
+            avoid_section = (
+                f"\nIMPORTANT: avoid these names entirely "
+                f"(too similar to existing): {avoid}"
+            )
 
         prompt = fmt(
             tpl["user_prompt_template"],
@@ -316,23 +361,46 @@ async def generate_product_draft(
                 text = await _claude_complete(
                     db, tpl["system_prompt"], prompt, tpl.get("model_name", CLAUDE_MODEL)
                 )
+
             elif text_provider == "openrouter":
-                # Use OpenRouter (free tier available)
-                or_prompt = f"{tpl['system_prompt']}\n\n{prompt}\n\nRespond with a single JSON object containing: productName, shortTitle, shortDescription, fullDescription, sizes, tags, finalPrice (number only)."
-                or_model = (settings or {}).get("ai", {}).get("openrouter_model") or "meta-llama/llama-3-8b-instruct:free"
+                or_prompt = (
+                    f"{tpl['system_prompt']}\n\n{prompt}\n\n"
+                    "Respond with a single JSON object containing: productName, shortTitle, "
+                    "shortDescription, fullDescription, sizes, tags, finalPrice (number only)."
+                )
+                or_model = (
+                    (settings or {}).get("ai", {}).get("openrouter_model")
+                    or "meta-llama/llama-3-8b-instruct:free"
+                )
                 text = await _openrouter_text_generation(db, or_prompt, or_model)
+
             elif text_provider == "groq":
-                # Use Groq (free tier available)
-                groq_prompt = f"{tpl['system_prompt']}\n\n{prompt}\n\nRespond with a single JSON object containing: productName, shortTitle, shortDescription, fullDescription, sizes, tags, finalPrice (number only)."
-                groq_model = (settings or {}).get("ai", {}).get("groq_model") or "llama3-8b-8192"
+                groq_prompt = (
+                    f"{tpl['system_prompt']}\n\n{prompt}\n\n"
+                    "Respond with a single JSON object containing: productName, shortTitle, "
+                    "shortDescription, fullDescription, sizes, tags, finalPrice (number only)."
+                )
+                groq_model = (
+                    (settings or {}).get("ai", {}).get("groq_model")
+                    or "llama3-8b-8192"
+                )
                 text = await _groq_text_generation(db, groq_prompt, groq_model)
+
             else:
-                # Use HuggingFace for free tier
-                hf_prompt = f"{tpl['system_prompt']}\n\n{prompt}\n\nRespond with a single JSON object containing: productName, shortTitle, shortDescription, fullDescription, sizes, tags, finalPrice (number only)."
-                # Get model from settings or use default
-                hf_model = (settings or {}).get("ai", {}).get("huggingface_text_model") or HF_TEXT_MODEL_DEFAULT
-                text = await _hf_text_generation_async(db, hf_prompt, hf_model)
+                # HuggingFace free tier
+                hf_prompt = (
+                    f"{tpl['system_prompt']}\n\n{prompt}\n\n"
+                    "Respond with a single JSON object containing: productName, shortTitle, "
+                    "shortDescription, fullDescription, sizes, tags, finalPrice (number only)."
+                )
+                hf_model = (
+                    (settings or {}).get("ai", {}).get("huggingface_text_model")
+                    or HF_TEXT_MODEL_DEFAULT
+                )
+                text = await _hf_text_generation(db, hf_prompt, hf_model)
+
             draft = _extract_json(text)
+
         except Exception as e:
             last_exc = e
             logger.exception("AI draft attempt %d failed: %s", attempt, e)
@@ -342,7 +410,7 @@ async def generate_product_draft(
         if dup and attempt < max_retries:
             avoid = (avoid + "; " if avoid else "") + dup
             logger.info(
-                "duplicate name '%s' similar to '%s' — retrying",
+                "Duplicate name '%s' similar to '%s' — retrying.",
                 draft.get("productName"),
                 dup,
             )
@@ -363,15 +431,17 @@ async def generate_product_draft(
 
 
 # ---------------------------------------------------------------------------
-# Image generation (Google Gemini)
+# Image generation — Google Gemini
 # ---------------------------------------------------------------------------
 
-def _gemini_image_call(db, system: str, prompt: str, image_bytes: bytes, model: str) -> Optional[bytes]:
+def _gemini_image_call(
+    db, system: str, prompt: str, image_bytes: bytes, model: str
+) -> Optional[bytes]:
     """Synchronous Gemini call; run in a thread from async code."""
     try:
         from google import genai
         from google.genai import types
-    except ImportError as e:  # pragma: no cover
+    except ImportError as e:
         raise RuntimeError("google-genai package not installed") from e
 
     client = genai.Client(api_key=_gemini_key(db))
@@ -430,32 +500,34 @@ async def generate_alternate_view(db, image_bytes: bytes, view: str) -> Optional
 
 
 # ---------------------------------------------------------------------------
-# HuggingFace image generation (free / open-source)
+# Image generation — HuggingFace (free / open-source)
 # ---------------------------------------------------------------------------
 
-def _hf_text_to_image(db, prompt: str, model: str) -> bytes:
-    """Synchronous HuggingFace text-to-image call; run in a thread."""
+def _hf_text_to_image(token: str | None, prompt: str, model: str) -> bytes:
+    """Synchronous HuggingFace text-to-image; run in a thread."""
     try:
         from huggingface_hub import InferenceClient
         from io import BytesIO
     except ImportError as e:
         raise RuntimeError("huggingface_hub package not installed") from e
-    client = InferenceClient(model=model, token=_hf_key(db))
+    client = InferenceClient(model=model, token=token)
     img = client.text_to_image(prompt)
     buf = BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
 
 
-def _hf_image_to_image(db, image_bytes: bytes, prompt: str, model: str) -> bytes:
-    """Synchronous HuggingFace image-to-image call; run in a thread."""
+def _hf_image_to_image(
+    token: str | None, image_bytes: bytes, prompt: str, model: str
+) -> bytes:
+    """Synchronous HuggingFace image-to-image; run in a thread."""
     try:
         from huggingface_hub import InferenceClient
         from PIL import Image
         from io import BytesIO
     except ImportError as e:
         raise RuntimeError("huggingface_hub or Pillow not installed") from e
-    client = InferenceClient(model=model, token=_hf_key(db))
+    client = InferenceClient(model=model, token=token)
     source = Image.open(BytesIO(image_bytes)).convert("RGB")
     result = client.image_to_image(image=source, prompt=prompt)
     buf = BytesIO()
@@ -466,26 +538,33 @@ def _hf_image_to_image(db, image_bytes: bytes, prompt: str, model: str) -> bytes
 async def generate_image_from_prompt(db, prompt: str) -> Optional[bytes]:
     """Generate a new product image from text using HuggingFace FLUX (free)."""
     model = os.environ.get("HF_TXT2IMG_MODEL", HF_TXT2IMG_MODEL)
+    token = await _hf_key(db)
     try:
-        return await asyncio.to_thread(_hf_text_to_image, db, prompt, model)
+        return await asyncio.to_thread(_hf_text_to_image, token, prompt, model)
     except Exception as e:
         logger.exception("generate_image_from_prompt failed: %s", e)
         return None
 
 
-async def regenerate_image_variation(db, image_bytes: bytes, instruction: str) -> Optional[bytes]:
+async def regenerate_image_variation(
+    db, image_bytes: bytes, instruction: str
+) -> Optional[bytes]:
     """Regenerate an image variation using HuggingFace instruct-pix2pix (free)."""
     model = os.environ.get("HF_IMG2IMG_MODEL", HF_IMG2IMG_MODEL)
-    prompt = instruction or "luxury fashion product photo, clean studio background, editorial lighting"
+    prompt = (
+        instruction
+        or "luxury fashion product photo, clean studio background, editorial lighting"
+    )
+    token = await _hf_key(db)
     try:
-        return await asyncio.to_thread(_hf_image_to_image, db, image_bytes, prompt, model)
+        return await asyncio.to_thread(_hf_image_to_image, token, image_bytes, prompt, model)
     except Exception as e:
         logger.exception("regenerate_image_variation failed: %s", e)
         return None
 
 
 # ---------------------------------------------------------------------------
-# Default seed prompts — only inserted if collection empty.
+# Default seed prompts — only inserted if collection is empty.
 # ---------------------------------------------------------------------------
 DEFAULT_PROMPTS: list[dict] = [
     {
@@ -506,7 +585,8 @@ DEFAULT_PROMPTS: list[dict] = [
             "Naming families available (blend tastefully, do not stack all):\n"
             "{{families_text}}\n\n"
             "Suggested sizes template: {{size_template}}\n"
-            "Target price band: {{min_price}}-{{max_price}} {{currency}} (category multiplier {{category_multiplier}})\n"
+            "Target price band: {{min_price}}-{{max_price}} {{currency}} "
+            "(category multiplier {{category_multiplier}})\n"
             "{{image_hint}}\n"
             "Avoid reusing these existing names: {{avoid_names}}\n\n"
             "Requirements:\n"
@@ -516,10 +596,12 @@ DEFAULT_PROMPTS: list[dict] = [
             "- fullDescription: 3-5 sentences, evokes craftsmanship, occasion, silhouette, fabric. No pricing talk.\n"
             "- tags: 4-8 lowercase keywords.\n"
             "- sizes: subset of the size template appropriate for the piece.\n"
-            "- finalPrice: integer in {{currency}}, WITHIN {{min_price}}-{{max_price}}, quietly informed by perceived quality, "
-            "complexity, embellishment, occasion, and category multiplier. Do NOT mention any research.\n"
+            "- finalPrice: integer in {{currency}}, WITHIN {{min_price}}-{{max_price}}, quietly informed by "
+            "perceived quality, complexity, embellishment, occasion, and category multiplier. "
+            "Do NOT mention any research.\n"
             "- pricingMeta (internal, admin-only): object with perceivedQuality (1-5), complexity (1-5), "
-            "occasionTier (\"daily\"|\"occasion\"|\"statement\"|\"ceremony\"), uplift (0.0-1.0), reasoning (one short sentence).\n\n"
+            "occasionTier (\"daily\"|\"occasion\"|\"statement\"|\"ceremony\"), uplift (0.0-1.0), "
+            "reasoning (one short sentence).\n\n"
             "Return exactly this JSON shape:\n"
             "{\n"
             "  \"productName\": \"...\",\n"
@@ -529,7 +611,8 @@ DEFAULT_PROMPTS: list[dict] = [
             "  \"tags\": [\"...\", \"...\"],\n"
             "  \"sizes\": [\"S\",\"M\",\"L\"],\n"
             "  \"finalPrice\": 89,\n"
-            "  \"pricingMeta\": { \"perceivedQuality\": 4, \"complexity\": 3, \"occasionTier\": \"occasion\", \"uplift\": 0.15, \"reasoning\": \"...\" }\n"
+            "  \"pricingMeta\": { \"perceivedQuality\": 4, \"complexity\": 3, "
+            "\"occasionTier\": \"occasion\", \"uplift\": 0.15, \"reasoning\": \"...\" }\n"
             "}\n"
         ),
         "enabled": True,
