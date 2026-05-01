@@ -1425,12 +1425,15 @@ async def seed():
                 "currency": "USD",
                 "features": {"ai_images": True, "alternates": True, "admin_pricing_reveal": True},
                 "ai": {
-                    "text_provider": "huggingface",  # anthropic, huggingface
+                    "text_provider": "groq",  # anthropic, huggingface, openrouter, groq
                     "image_provider": "huggingface",  # huggingface, gemini
-                    "huggingface_text_model": "gpt2",
+                    "openrouter_model": "meta-llama/llama-3-8b-instruct:free",
+                    "groq_model": "llama3-8b-8192",
                     "anthropic_api_key": "",
                     "gemini_api_key": "",
                     "huggingface_api_key": "",
+                    "openrouter_api_key": "",
+                    "groq_api_key": "",
                 },
                 "created_at": iso(now_utc()),
             })

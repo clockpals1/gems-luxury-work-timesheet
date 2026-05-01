@@ -51,8 +51,8 @@ def _anthropic_key(db=None) -> str | None:
     return os.environ.get("ANTHROPIC_API_KEY")
 
 
-def _gemini_key(db=None) -> str:
-    """Get Gemini API key from admin settings or environment."""
+def _gemini_key(db=None) -> str | None:
+    """Get Gemini API key from admin settings or environment. Returns None if not set."""
     if db:
         try:
             settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
@@ -64,6 +64,30 @@ def _gemini_key(db=None) -> str:
     if not key:
         raise RuntimeError("GEMINI_API_KEY not set")
     return key
+
+
+def _openrouter_key(db=None) -> str | None:
+    """Get OpenRouter API key from admin settings or environment. Returns None if not set."""
+    if db:
+        try:
+            settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
+            if settings and settings.get("ai", {}).get("openrouter_api_key"):
+                return settings["ai"]["openrouter_api_key"]
+        except Exception:
+            pass
+    return os.environ.get("OPENROUTER_API_KEY")
+
+
+def _groq_key(db=None) -> str | None:
+    """Get Groq API key from admin settings or environment. Returns None if not set."""
+    if db:
+        try:
+            settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
+            if settings and settings.get("ai", {}).get("groq_api_key"):
+                return settings["ai"]["groq_api_key"]
+        except Exception:
+            pass
+    return os.environ.get("GROQ_API_KEY")
 
 
 async def _hf_key(db=None) -> str | None:
@@ -125,6 +149,48 @@ async def _get_template(db, key: str) -> dict:
 # ---------------------------------------------------------------------------
 # Text generation (Anthropic and HuggingFace)
 # ---------------------------------------------------------------------------
+
+
+async def _openrouter_text_generation(db, prompt: str, model: str) -> str:
+    """OpenRouter text generation using OpenAI-compatible API."""
+    try:
+        from openai import AsyncOpenAI
+    except ImportError as e:
+        raise RuntimeError("openai package not installed") from e
+    key = _openrouter_key(db)
+    if not key:
+        raise RuntimeError("OpenRouter API key is required. Add it in Admin Settings → AI Settings or set OPENROUTER_API_KEY environment variable.")
+    try:
+        client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=key)
+        completion = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=512
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        raise RuntimeError(f"OpenRouter API error: {e}")
+
+
+async def _groq_text_generation(db, prompt: str, model: str) -> str:
+    """Groq text generation using OpenAI-compatible API."""
+    try:
+        from openai import AsyncOpenAI
+    except ImportError as e:
+        raise RuntimeError("openai package not installed") from e
+    key = _groq_key(db)
+    if not key:
+        raise RuntimeError("Groq API key is required. Add it in Admin Settings → AI Settings or set GROQ_API_KEY environment variable.")
+    try:
+        client = AsyncOpenAI(base_url="https://api.groq.com/openai/v1", api_key=key)
+        completion = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=512
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        raise RuntimeError(f"Groq API error: {e}")
 
 
 async def _hf_text_generation(db, prompt: str, model: str) -> str:
@@ -250,6 +316,16 @@ async def generate_product_draft(
                 text = await _claude_complete(
                     db, tpl["system_prompt"], prompt, tpl.get("model_name", CLAUDE_MODEL)
                 )
+            elif text_provider == "openrouter":
+                # Use OpenRouter (free tier available)
+                or_prompt = f"{tpl['system_prompt']}\n\n{prompt}\n\nRespond with a single JSON object containing: productName, shortTitle, shortDescription, fullDescription, sizes, tags, finalPrice (number only)."
+                or_model = (settings or {}).get("ai", {}).get("openrouter_model") or "meta-llama/llama-3-8b-instruct:free"
+                text = await _openrouter_text_generation(db, or_prompt, or_model)
+            elif text_provider == "groq":
+                # Use Groq (free tier available)
+                groq_prompt = f"{tpl['system_prompt']}\n\n{prompt}\n\nRespond with a single JSON object containing: productName, shortTitle, shortDescription, fullDescription, sizes, tags, finalPrice (number only)."
+                groq_model = (settings or {}).get("ai", {}).get("groq_model") or "llama3-8b-8192"
+                text = await _groq_text_generation(db, groq_prompt, groq_model)
             else:
                 # Use HuggingFace for free tier
                 hf_prompt = f"{tpl['system_prompt']}\n\n{prompt}\n\nRespond with a single JSON object containing: productName, shortTitle, shortDescription, fullDescription, sizes, tags, finalPrice (number only)."
