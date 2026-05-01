@@ -1192,9 +1192,13 @@ async def update_ai_settings(body: dict, user: dict = Depends(require_role("admi
     allowed = {
         "text_provider": body.get("text_provider"),
         "image_provider": body.get("image_provider"),
+        "openrouter_model": body.get("openrouter_model"),
+        "groq_model": body.get("groq_model"),
         "anthropic_api_key": body.get("anthropic_api_key", ""),
         "gemini_api_key": body.get("gemini_api_key", ""),
         "huggingface_api_key": body.get("huggingface_api_key", ""),
+        "openrouter_api_key": body.get("openrouter_api_key", ""),
+        "groq_api_key": body.get("groq_api_key", ""),
     }
     update = {k: v for k, v in allowed.items() if v is not None}
     if not update:
