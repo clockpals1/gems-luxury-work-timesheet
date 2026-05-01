@@ -793,10 +793,10 @@ async def upload_image(
         raise HTTPException(400, "Empty file")
     path = storage.build_path(user["id"], file.filename or "image.png")
     try:
-        result = storage.put_object(path, data, file.content_type or "image/png")
+        result = await asyncio.to_thread(storage.put_object, path, data, file.content_type or "image/png")
     except Exception as e:
-        logger.exception("upload failed")
-        raise HTTPException(500, f"Upload failed: {e}")
+        logger.exception("upload storage failed")
+        raise HTTPException(500, f"Storage upload failed: {e}")
     doc = {
         "id": new_id(),
         "storage_path": result["path"],
@@ -812,7 +812,11 @@ async def upload_image(
         "uploaded_by": user["id"],
         "uploaded_at": iso(now_utc()),
     }
-    await db.image_assets.insert_one(doc)
+    try:
+        await db.image_assets.insert_one(doc)
+    except Exception as e:
+        logger.exception("upload DB insert failed")
+        raise HTTPException(503, f"DB insert failed: {e}")
     doc.pop("_id", None)
     await log_activity(user["id"], "image_uploaded", {"filename": file.filename}, "image", doc["id"])
     return doc
@@ -878,7 +882,7 @@ async def upload_images_bulk(
                 errors.append({"filename": f.filename, "error": "empty"})
                 continue
             path = storage.build_path(user["id"], f.filename or "image.png")
-            result = storage.put_object(path, data, f.content_type or "image/png")
+            result = await asyncio.to_thread(storage.put_object, path, data, f.content_type or "image/png")
             doc = {
                 "id": new_id(),
                 "storage_path": result["path"],
@@ -1423,7 +1427,7 @@ async def on_stop():
 @app.get("/health")
 async def health() -> dict:
     db_status = await check_db()
-    return {"status": "ok", "deploy_version": "v5-db-autoreset", **db_status}
+    return {"status": "ok", "deploy_version": "v6-no-params", **db_status}
 
 
 # Wrap the ENTIRE FastAPI stack (including Starlette's ServerErrorMiddleware)
