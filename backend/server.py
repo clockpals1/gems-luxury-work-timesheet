@@ -885,6 +885,22 @@ async def patch_image(image_id: str, body: dict, user: dict = Depends(require_ro
     return {"ok": True}
 
 
+@api.delete("/admin/images/{image_id}")
+async def delete_image(image_id: str, user: dict = Depends(require_role("admin", "manager"))):
+    asset = await db.image_assets.find_one({"id": image_id, "is_deleted": {"$ne": True}}, {"_id": 0})
+    if not asset:
+        raise HTTPException(404, "Not found")
+    # Delete from storage
+    try:
+        await asyncio.to_thread(storage.delete_object, asset["storage_path"])
+    except Exception as e:
+        logger.exception("storage delete failed (non-fatal): %s", e)
+    # Mark as deleted in DB
+    await db.image_assets.update_one({"id": image_id}, {"$set": {"is_deleted": True, "deleted_at": iso(now_utc()), "deleted_by": user["id"]}})
+    await log_activity(user["id"], "image_deleted", {"filename": asset.get("filename")}, "image", image_id)
+    return {"ok": True}
+
+
 @api.post("/admin/images/upload-bulk")
 async def upload_images_bulk(
     files: list[UploadFile] = File(...),

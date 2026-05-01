@@ -138,6 +138,23 @@ def get_object(path: str) -> tuple[bytes, str]:
         return resp.content, ct
 
 
+def delete_object(path: str) -> None:
+    """Delete an object. Uses R2 if configured, otherwise Supabase Storage."""
+    if _use_r2():
+        client = _r2_client()
+        client.delete_object(Bucket=_r2_bucket(), Key=path)
+        logger.info("r2 delete ok: %s", path)
+        return
+
+    url = f"{_supabase_url()}/storage/v1/object/{_SB_BUCKET}/{path}"
+    with httpx.Client(timeout=60.0) as client:
+        resp = client.delete(url, headers=_sb_headers())
+        if resp.status_code >= 300:
+            logger.error("supabase delete failed %s: %s", resp.status_code, resp.text)
+            resp.raise_for_status()
+    logger.info("supabase delete ok: %s", path)
+
+
 def build_path(user_id: str, filename: str, kind: str = "uploads") -> str:
     """Build a deterministic, namespaced storage path."""
     ext = filename.split(".")[-1].lower() if filename and "." in filename else "bin"
