@@ -119,15 +119,18 @@ def require_role(*roles: str):
 
 
 async def log_activity(user_id: str, event_type: str, detail: dict | None = None, item_type: str | None = None, item_id: str | None = None):
-    await db.activity_logs.insert_one({
-        "id": new_id(),
-        "user_id": user_id,
-        "event_type": event_type,
-        "item_type": item_type,
-        "item_id": item_id,
-        "detail": detail or {},
-        "timestamp": iso(now_utc()),
-    })
+    try:
+        await db.activity_logs.insert_one({
+            "id": new_id(),
+            "user_id": user_id,
+            "event_type": event_type,
+            "item_type": item_type,
+            "item_id": item_id,
+            "detail": detail or {},
+            "timestamp": iso(now_utc()),
+        })
+    except Exception as _log_err:
+        logger.warning("log_activity failed (non-fatal): %s", _log_err)
 
 
 async def get_settings() -> dict:
@@ -318,13 +321,21 @@ async def update_user(user_id: str, body: UpdateUserIn, user: dict = Depends(req
 async def delete_user(user_id: str, user: dict = Depends(require_role("admin"))):
     if user_id == user["id"]:
         raise HTTPException(400, "Cannot delete your own account")
-    target = await db.users.find_one({"id": user_id, "is_deleted": {"$ne": True}})
+    try:
+        target = await db.users.find_one({"id": user_id, "is_deleted": {"$ne": True}})
+    except Exception as e:
+        logger.exception("delete_user find failed: %s", e)
+        raise HTTPException(503, "Database unavailable, please retry")
     if not target:
         raise HTTPException(404, "User not found")
-    await db.users.update_one(
-        {"id": user_id},
-        {"$set": {"is_deleted": True, "active": False, "deleted_at": iso(now_utc()), "deleted_by": user["id"]}},
-    )
+    try:
+        await db.users.update_one(
+            {"id": user_id},
+            {"$set": {"is_deleted": True, "active": False, "deleted_at": iso(now_utc()), "deleted_by": user["id"]}},
+        )
+    except Exception as e:
+        logger.exception("delete_user update failed: %s", e)
+        raise HTTPException(503, "Database write failed, please retry")
     await log_activity(user["id"], "user_deleted", {"email": target.get("email")}, "user", user_id)
     return {"ok": True}
 
