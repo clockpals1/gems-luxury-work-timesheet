@@ -134,8 +134,23 @@ def _hf_text_generation(db, prompt: str, model: str) -> str:
     except ImportError as e:
         raise RuntimeError("huggingface_hub package not installed") from e
     client = InferenceClient(model=model, token=_hf_key(db))
-    response = client.text_generation(prompt, max_new_tokens=1024, return_full_text=False)
-    return response
+    try:
+        response = client.text_generation(prompt, max_new_tokens=1024, return_full_text=False)
+        return response
+    except Exception as e:
+        # If the model fails, try a fallback model
+        logger.warning("Primary model %s failed: %s, trying fallback", model, e)
+        fallback_models = ["meta-llama/Llama-3.2-3B-Instruct", "Qwen/Qwen2.5-3B-Instruct"]
+        for fallback in fallback_models:
+            try:
+                logger.info("Trying fallback model: %s", fallback)
+                client = InferenceClient(model=fallback, token=_hf_key(db))
+                response = client.text_generation(prompt, max_new_tokens=1024, return_full_text=False)
+                logger.info("Fallback model %s succeeded", fallback)
+                return response
+            except Exception as fe:
+                logger.warning("Fallback model %s also failed: %s", fallback, fe)
+        raise e
 
 
 async def _hf_text_generation_async(db, prompt: str, model: str) -> str:
