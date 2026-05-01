@@ -291,7 +291,7 @@ async def generate_product_draft(
 
     # Check which provider to use
     settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0})
-    text_provider = (settings or {}).get("ai", {}).get("text_provider", "huggingface") if settings else "huggingface"
+    text_provider = (settings or {}).get("ai", {}).get("text_provider", "groq") if settings else "groq"
 
     for attempt in range(max_retries + 1):
         avoid_section = ""
