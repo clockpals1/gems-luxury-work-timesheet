@@ -38,6 +38,14 @@ HF_TEXT_FALLBACKS = [
     "HuggingFaceH4/zephyr-7b-beta",
 ]
 
+# Groq — current recommended models (updated when old ones are decommissioned)
+GROQ_MODEL_DEFAULT = "llama-3.3-70b-versatile"
+GROQ_FALLBACKS = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
+]
+
 # Prompt template keys
 PT_PRODUCT_DRAFT = "product_draft"
 PT_IMAGE_ENHANCE = "image_enhance"
@@ -47,9 +55,6 @@ PT_IMAGE_GENERATE = "image_generate"
 
 # ---------------------------------------------------------------------------
 # API key helpers — all async so Motor (async MongoDB) is awaited correctly.
-# Previously these were sync, causing the DB read to return a coroutine
-# object (always truthy but never the actual value), silently falling back
-# to env vars and ignoring keys saved in Admin Settings.
 # ---------------------------------------------------------------------------
 
 async def _anthropic_key(db=None) -> str | None:
@@ -220,7 +225,7 @@ async def _openrouter_text_generation(db, prompt: str, model: str) -> str:
 
 
 async def _groq_text_generation(db, prompt: str, model: str) -> str:
-    """Groq text generation using OpenAI-compatible API."""
+    """Groq text generation with automatic fallback for decommissioned models."""
     try:
         from openai import AsyncOpenAI
     except ImportError as e:
@@ -232,16 +237,36 @@ async def _groq_text_generation(db, prompt: str, model: str) -> str:
             "Groq API key is required. Add it in Admin Settings → AI Settings "
             "or set GROQ_API_KEY environment variable."
         )
+
     client = AsyncOpenAI(base_url="https://api.groq.com/openai/v1", api_key=key)
-    try:
-        completion = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=512,
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        raise RuntimeError(f"Groq API error: {e}") from e
+
+    # Try the requested model first, then fall back through the list
+    models_to_try = [model] + [m for m in GROQ_FALLBACKS if m != model]
+    last_exc: Exception | None = None
+
+    for m in models_to_try:
+        try:
+            completion = await client.chat.completions.create(
+                model=m,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=512,
+            )
+            logger.info("Groq model '%s' succeeded.", m)
+            return completion.choices[0].message.content
+        except Exception as e:
+            err_str = str(e)
+            if "decommissioned" in err_str or "model_not_found" in err_str or "404" in err_str:
+                logger.warning("Groq model '%s' unavailable, trying next fallback. Error: %s", m, e)
+                last_exc = e
+                continue
+            # Non-model error (auth, rate limit, etc.) — raise immediately
+            raise RuntimeError(f"Groq API error: {e}") from e
+
+    raise RuntimeError(
+        f"All Groq models are unavailable or decommissioned. "
+        f"Last error: {last_exc}. "
+        f"Check https://console.groq.com/docs/deprecations for current models."
+    )
 
 
 def _hf_chat_sync(token: str | None, prompt: str, models_to_try: list[str]) -> str:
@@ -249,9 +274,7 @@ def _hf_chat_sync(token: str | None, prompt: str, models_to_try: list[str]) -> s
     Synchronous HuggingFace chat_completion call.
 
     Uses the serverless /v1/chat/completions endpoint which is the actively
-    maintained free-tier path. The old text_generation() pipeline endpoint
-    no longer serves classic models (gpt2, distilgpt2, etc.) via serverless.
-    Run via asyncio.to_thread() from async callers.
+    maintained free-tier path. Run via asyncio.to_thread() from async callers.
     """
     try:
         from huggingface_hub import InferenceClient
@@ -383,7 +406,7 @@ async def generate_product_draft(
                 )
                 groq_model = (
                     (settings or {}).get("ai", {}).get("groq_model")
-                    or "llama3-8b-8192"
+                    or GROQ_MODEL_DEFAULT
                 )
                 text = await _groq_text_generation(db, groq_prompt, groq_model)
 
