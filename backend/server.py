@@ -378,24 +378,21 @@ async def _open_break(att_id: str) -> Optional[dict]:
 
 
 @api.post("/attendance/punch-in")
-async def punch_in(user: dict = Depends(get_current_user)):
-    existing = await _open_attendance(user["id"])
-    if existing:
-        return existing
+async def punch_in(request: Request, user: dict = Depends(get_current_user)):
+    if await _open_attendance(user["id"]):
+        raise HTTPException(400, "Already punched in")
+    now = now_utc()
     doc = {
         "id": new_id(),
         "user_id": user["id"],
         "user_name": user["name"],
-        "punch_in": iso(now_utc()),
-        "punch_out": None,
-        "last_activity": iso(now_utc()),
-        "auto_punched_out": False,
-        "total_minutes": 0,
-        "break_minutes": 0,
+        "punch_in": iso(now),
+        "last_activity": iso(now),
     }
     await db.attendance_logs.insert_one(doc)
-    await log_activity(user["id"], "punch_in", item_type="attendance", item_id=doc["id"])
-    doc.pop("_id", None)
+    # Get client IP
+    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or request.client.host if request.client else None
+    await log_activity(user["id"], "punch_in", {}, "attendance", doc["id"], ip_address=client_ip, user_name=user["name"])
     return doc
 
 
@@ -1219,7 +1216,7 @@ async def activity_logs(
     user_id: Optional[str] = Query(None),
     item_type: Optional[str] = Query(None),
 ):
-    """Get activity logs with filtering options."""
+    """Get activity logs with filtering options. Returns user-friendly data."""
     query: dict = {}
     if event_type:
         query["event_type"] = event_type
@@ -1227,7 +1224,14 @@ async def activity_logs(
         query["user_id"] = user_id
     if item_type:
         query["item_type"] = item_type
-    return await db.activity_logs.find(query, {"_id": 0}).sort("timestamp", -1).to_list(limit)
+    logs = await db.activity_logs.find(query, {"_id": 0}).sort("timestamp", -1).to_list(limit)
+    # Enrich with user names if missing
+    for log in logs:
+        if not log.get("user_name") and log.get("user_id"):
+            user_record = await db.users.find_one({"id": log["user_id"]}, {"_id": 0, "name": 1})
+            if user_record:
+                log["user_name"] = user_record.get("name")
+    return logs
 
 
 # ---------- Prompt templates ----------
@@ -1419,7 +1423,7 @@ async def seed():
                 "currency": "USD",
                 "features": {"ai_images": True, "alternates": True, "admin_pricing_reveal": True},
                 "ai": {
-                    "text_provider": "anthropic",  # anthropic, huggingface
+                    "text_provider": "huggingface",  # anthropic, huggingface
                     "image_provider": "huggingface",  # huggingface, gemini
                     "anthropic_api_key": "",
                     "gemini_api_key": "",
