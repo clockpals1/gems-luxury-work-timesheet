@@ -349,7 +349,7 @@ async def delete_user(user_id: str, user: dict = Depends(require_role("admin")))
         )
     except Exception as e:
         logger.exception("delete_user update failed: %s", e)
-        raise HTTPException(503, "Database write failed, please retry")
+        raise HTTPException(503, f"DB write failed [{type(e).__name__}]: {e}")
     await log_activity(user["id"], "user_deleted", {"email": target.get("email")}, "user", user_id)
     return {"ok": True}
 
