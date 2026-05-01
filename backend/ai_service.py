@@ -30,6 +30,7 @@ GEMINI_IMAGE_MODEL = "gemini-2.0-flash-exp"
 # HuggingFace free-tier models
 HF_TXT2IMG_MODEL = "black-forest-labs/FLUX.1-schnell"  # best free text-to-image
 HF_IMG2IMG_MODEL = "timbrooks/instruct-pix2pix"         # free image-to-image
+HF_TEXT_MODEL = "mistralai/Mistral-7B-Instruct-v0.3"   # free text generation
 
 # Prompt template keys
 PT_PRODUCT_DRAFT = "product_draft"
@@ -122,8 +123,24 @@ async def _get_template(db, key: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Text generation (Anthropic)
+# Text generation (Anthropic and HuggingFace)
 # ---------------------------------------------------------------------------
+
+
+def _hf_text_generation(db, prompt: str, model: str) -> str:
+    """Synchronous HuggingFace text generation call; run in a thread."""
+    try:
+        from huggingface_hub import InferenceClient
+    except ImportError as e:
+        raise RuntimeError("huggingface_hub package not installed") from e
+    client = InferenceClient(model=model, token=_hf_key(db))
+    response = client.text_generation(prompt, max_new_tokens=1024, return_full_text=False)
+    return response
+
+
+async def _hf_text_generation_async(db, prompt: str, model: str) -> str:
+    """Async wrapper for HuggingFace text generation."""
+    return await asyncio.to_thread(_hf_text_generation, db, prompt, model)
 
 async def _claude_complete(db, system: str, prompt: str, model: str) -> str:
     """Call Anthropic Messages API and return the assistant text."""
@@ -185,6 +202,10 @@ async def generate_product_draft(
     draft: dict = {}
     last_exc: Exception | None = None
 
+    # Check which provider to use
+    settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
+    text_provider = (settings or {}).get("ai", {}).get("text_provider", "huggingface") if settings else "huggingface"
+
     for attempt in range(max_retries + 1):
         avoid_section = ""
         if avoid:
@@ -204,9 +225,14 @@ async def generate_product_draft(
         )
 
         try:
-            text = await _claude_complete(
-                db, tpl["system_prompt"], prompt, tpl.get("model_name", CLAUDE_MODEL)
-            )
+            if text_provider == "anthropic":
+                text = await _claude_complete(
+                    db, tpl["system_prompt"], prompt, tpl.get("model_name", CLAUDE_MODEL)
+                )
+            else:
+                # Use HuggingFace for free tier
+                hf_prompt = f"{tpl['system_prompt']}\n\n{prompt}\n\nRespond with a single JSON object containing: productName, shortTitle, shortDescription, fullDescription, sizes, tags, finalPrice (number only)."
+                text = await _hf_text_generation_async(db, hf_prompt, HF_TEXT_MODEL)
             draft = _extract_json(text)
         except Exception as e:
             last_exc = e
