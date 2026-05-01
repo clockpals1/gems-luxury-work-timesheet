@@ -160,6 +160,7 @@ async def generate_product_draft(
     existing_names = existing_names or []
     avoid = ""
     draft: dict = {}
+    last_exc: Exception | None = None
 
     for attempt in range(max_retries + 1):
         avoid_section = ""
@@ -185,6 +186,7 @@ async def generate_product_draft(
             )
             draft = _extract_json(text)
         except Exception as e:
+            last_exc = e
             logger.exception("AI draft attempt %d failed: %s", attempt, e)
             continue
 
@@ -200,7 +202,7 @@ async def generate_product_draft(
         break
 
     if not draft:
-        raise RuntimeError("AI generation failed")
+        raise last_exc or RuntimeError("AI generation failed after all retries")
 
     try:
         price = int(draft.get("finalPrice", min_price))

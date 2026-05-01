@@ -569,7 +569,11 @@ async def generate_product(body: GenerateProductIn, user: dict = Depends(get_cur
         "generated_by_name": user["name"],
         "generated_at": iso(now_utc()),
     }
-    await db.generated_products.insert_one(doc)
+    try:
+        await db.generated_products.insert_one(doc)
+    except Exception as e:
+        logger.exception("generate_product DB insert failed")
+        raise HTTPException(503, f"DB insert failed: {e}")
     # Mark image assigned
     if image_asset:
         await db.image_assets.update_one(
@@ -852,9 +856,9 @@ async def download_image(image_id: str, authorization: Optional[str] = Header(No
         var = await db.image_variations.find_one({"id": image_id}, {"_id": 0})
         if not var:
             raise HTTPException(404, "Not found")
-        data, ct = storage.get_object(var["storage_path"])
+        data, ct = await asyncio.to_thread(storage.get_object, var["storage_path"])
         return Response(content=data, media_type=var.get("content_type", ct))
-    data, ct = storage.get_object(asset["storage_path"])
+    data, ct = await asyncio.to_thread(storage.get_object, asset["storage_path"])
     return Response(content=data, media_type=asset.get("content_type") or ct)
 
 
@@ -921,16 +925,25 @@ async def enhance_image_ep(image_id: str, user: dict = Depends(require_role("adm
     asset = await db.image_assets.find_one({"id": image_id}, {"_id": 0})
     if not asset:
         raise HTTPException(404, "Not found")
-    data, _ = storage.get_object(asset["storage_path"])
+    try:
+        data, _ = await asyncio.to_thread(storage.get_object, asset["storage_path"])
+    except Exception as e:
+        raise HTTPException(500, f"Could not load image: {e}")
     result = await ai_service.enhance_image(db, data)
     if not result:
-        raise HTTPException(500, "Enhance failed")
-    path = storage.build_path(user["id"], f"enhanced-{asset['filename'] or 'x.png'}", kind="variations")
-    storage.put_object(path, result, "image/png")
+        raise HTTPException(500, "Enhance failed — check GEMINI_API_KEY")
+    path = storage.build_path(user["id"], f"enhanced-{asset.get('filename') or 'x.png'}", kind="variations")
+    try:
+        await asyncio.to_thread(storage.put_object, path, result, "image/png")
+    except Exception as e:
+        raise HTTPException(500, f"Storage error: {e}")
     doc = {"id": new_id(), "source_image_id": image_id, "storage_path": path,
            "content_type": "image/png", "kind": "enhanced",
            "created_by": user["id"], "created_at": iso(now_utc())}
-    await db.image_variations.insert_one(doc)
+    try:
+        await db.image_variations.insert_one(doc)
+    except Exception as e:
+        raise HTTPException(503, f"DB insert failed: {e}")
     doc.pop("_id", None)
     await log_activity(user["id"], "image_enhanced", {"source": image_id}, "image_variation", doc["id"])
     return doc
@@ -941,18 +954,29 @@ async def generate_alternates(image_id: str, user: dict = Depends(require_role("
     asset = await db.image_assets.find_one({"id": image_id}, {"_id": 0})
     if not asset:
         raise HTTPException(404, "Not found")
-    data, _ = storage.get_object(asset["storage_path"])
+    try:
+        data, _ = await asyncio.to_thread(storage.get_object, asset["storage_path"])
+    except Exception as e:
+        raise HTTPException(500, f"Could not load image: {e}")
     results = []
     for view in ["three-quarter angle", "back view"]:
         out = await ai_service.generate_alternate_view(db, data, view)
         if not out:
             continue
         path = storage.build_path(user["id"], f"alt-{view.replace(' ', '-')}.png", kind="variations")
-        storage.put_object(path, out, "image/png")
+        try:
+            await asyncio.to_thread(storage.put_object, path, out, "image/png")
+        except Exception as e:
+            logger.exception("alternates storage failed for view %s: %s", view, e)
+            continue
         doc = {"id": new_id(), "source_image_id": image_id, "storage_path": path,
                "content_type": "image/png", "kind": "alternate", "view": view,
                "created_by": user["id"], "created_at": iso(now_utc())}
-        await db.image_variations.insert_one(doc)
+        try:
+            await db.image_variations.insert_one(doc)
+        except Exception as e:
+            logger.exception("alternates DB insert failed: %s", e)
+            continue
         doc.pop("_id", None)
         results.append(doc)
     await log_activity(user["id"], "image_alternates", {"count": len(results)}, "image", image_id)
@@ -976,7 +1000,7 @@ async def generate_image_ep(body: GenerateImageIn, user: dict = Depends(require_
         raise HTTPException(500, "Image generation failed — check HUGGINGFACE_API_KEY or model availability")
     path = storage.build_path(user["id"], "generated.png", kind="generated")
     try:
-        storage.put_object(path, result, "image/png")
+        await asyncio.to_thread(storage.put_object, path, result, "image/png")
     except Exception as e:
         logger.exception("generate_image storage failed")
         raise HTTPException(500, f"Storage error: {e}")
@@ -996,7 +1020,11 @@ async def generate_image_ep(body: GenerateImageIn, user: dict = Depends(require_
         "uploaded_at": iso(now_utc()),
         "source": "ai_generated",
     }
-    await db.image_assets.insert_one(doc)
+    try:
+        await db.image_assets.insert_one(doc)
+    except Exception as e:
+        logger.exception("generate_image DB insert failed")
+        raise HTTPException(503, f"DB insert failed: {e}")
     doc.pop("_id", None)
     await log_activity(user["id"], "image_generated", {"prompt": body.prompt[:100]}, "image", doc["id"])
     return doc
@@ -1009,7 +1037,7 @@ async def regenerate_image_ep(image_id: str, body: RegenerateImageIn, user: dict
     if not asset:
         raise HTTPException(404, "Not found")
     try:
-        data, _ = storage.get_object(asset["storage_path"])
+        data, _ = await asyncio.to_thread(storage.get_object, asset["storage_path"])
     except Exception as e:
         raise HTTPException(500, f"Could not load source image: {e}")
     result = await ai_service.regenerate_image_variation(data, body.instruction or "")
@@ -1017,7 +1045,7 @@ async def regenerate_image_ep(image_id: str, body: RegenerateImageIn, user: dict
         raise HTTPException(500, "Regeneration failed — check HUGGINGFACE_API_KEY or model availability")
     path = storage.build_path(user["id"], f"regen-{asset.get('filename', 'image.png')}", kind="variations")
     try:
-        storage.put_object(path, result, "image/png")
+        await asyncio.to_thread(storage.put_object, path, result, "image/png")
     except Exception as e:
         logger.exception("regenerate_image storage failed")
         raise HTTPException(500, f"Storage error: {e}")
@@ -1031,7 +1059,11 @@ async def regenerate_image_ep(image_id: str, body: RegenerateImageIn, user: dict
         "created_by": user["id"],
         "created_at": iso(now_utc()),
     }
-    await db.image_variations.insert_one(doc)
+    try:
+        await db.image_variations.insert_one(doc)
+    except Exception as e:
+        logger.exception("regenerate_image DB insert failed")
+        raise HTTPException(503, f"DB insert failed: {e}")
     doc.pop("_id", None)
     await log_activity(user["id"], "image_regenerated", {"source": image_id, "instruction": body.instruction}, "image_variation", doc["id"])
     return doc
