@@ -27,8 +27,8 @@ CLAUDE_MODEL = "claude-3-5-sonnet-20241022"
 GEMINI_IMAGE_MODEL = "gemini-2.0-flash-exp"
 
 # HuggingFace free-tier models
-HF_TXT2IMG_MODEL = "black-forest-labs/FLUX.1-schnell"   # best free text-to-image
-HF_IMG2IMG_MODEL = "timbrooks/instruct-pix2pix"          # free image-to-image
+HF_TXT2IMG_MODEL = "black-forest-labs/FLUX.1-schnell"       # best free text-to-image
+HF_IMG2IMG_MODEL = "timbrooks/instruct-pix2pix"              # free image-to-image
 HF_TEXT_MODEL_DEFAULT = "meta-llama/Llama-3.2-3B-Instruct"  # reliable free-tier chat model
 
 # Ordered fallbacks for HuggingFace text (all support chat_completion on serverless)
@@ -46,14 +46,17 @@ PT_IMAGE_GENERATE = "image_generate"
 
 
 # ---------------------------------------------------------------------------
-# API key helpers
+# API key helpers — all async so Motor (async MongoDB) is awaited correctly.
+# Previously these were sync, causing the DB read to return a coroutine
+# object (always truthy but never the actual value), silently falling back
+# to env vars and ignoring keys saved in Admin Settings.
 # ---------------------------------------------------------------------------
 
-def _anthropic_key(db=None) -> str | None:
+async def _anthropic_key(db=None) -> str | None:
     """Get Anthropic API key from admin settings or environment."""
     if db:
         try:
-            settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
+            settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0})
             if settings and settings.get("ai", {}).get("anthropic_api_key"):
                 return settings["ai"]["anthropic_api_key"]
         except Exception:
@@ -61,11 +64,11 @@ def _anthropic_key(db=None) -> str | None:
     return os.environ.get("ANTHROPIC_API_KEY")
 
 
-def _gemini_key(db=None) -> str | None:
+async def _gemini_key(db=None) -> str | None:
     """Get Gemini API key from admin settings or environment."""
     if db:
         try:
-            settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
+            settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0})
             if settings and settings.get("ai", {}).get("gemini_api_key"):
                 return settings["ai"]["gemini_api_key"]
         except Exception:
@@ -76,11 +79,11 @@ def _gemini_key(db=None) -> str | None:
     return key
 
 
-def _openrouter_key(db=None) -> str | None:
+async def _openrouter_key(db=None) -> str | None:
     """Get OpenRouter API key from admin settings or environment."""
     if db:
         try:
-            settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
+            settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0})
             if settings and settings.get("ai", {}).get("openrouter_api_key"):
                 return settings["ai"]["openrouter_api_key"]
         except Exception:
@@ -88,11 +91,11 @@ def _openrouter_key(db=None) -> str | None:
     return os.environ.get("OPENROUTER_API_KEY")
 
 
-def _groq_key(db=None) -> str | None:
+async def _groq_key(db=None) -> str | None:
     """Get Groq API key from admin settings or environment."""
     if db:
         try:
-            settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
+            settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0})
             if settings and settings.get("ai", {}).get("groq_api_key"):
                 return settings["ai"]["groq_api_key"]
         except Exception:
@@ -171,7 +174,7 @@ async def _claude_complete(db, system: str, prompt: str, model: str) -> str:
     except ImportError as e:
         raise RuntimeError("anthropic package not installed") from e
 
-    key = _anthropic_key(db)
+    key = await _anthropic_key(db)
     if not key:
         raise RuntimeError(
             "ANTHROPIC_API_KEY not set. Configure it in Admin Settings → AI Settings "
@@ -197,7 +200,8 @@ async def _openrouter_text_generation(db, prompt: str, model: str) -> str:
         from openai import AsyncOpenAI
     except ImportError as e:
         raise RuntimeError("openai package not installed") from e
-    key = _openrouter_key(db)
+
+    key = await _openrouter_key(db)
     if not key:
         raise RuntimeError(
             "OpenRouter API key is required. Add it in Admin Settings → AI Settings "
@@ -221,7 +225,8 @@ async def _groq_text_generation(db, prompt: str, model: str) -> str:
         from openai import AsyncOpenAI
     except ImportError as e:
         raise RuntimeError("openai package not installed") from e
-    key = _groq_key(db)
+
+    key = await _groq_key(db)
     if not key:
         raise RuntimeError(
             "Groq API key is required. Add it in Admin Settings → AI Settings "
@@ -269,7 +274,6 @@ def _hf_chat_sync(token: str | None, prompt: str, models_to_try: list[str]) -> s
             logger.warning("HuggingFace model '%s' failed: %s", model, e)
             last_exc = e
 
-    # Surface a clear error after all models are exhausted
     err_str = str(last_exc or "")
     if "401" in err_str or "Invalid username" in err_str:
         raise RuntimeError(
@@ -284,10 +288,7 @@ def _hf_chat_sync(token: str | None, prompt: str, models_to_try: list[str]) -> s
 async def _hf_text_generation(db, prompt: str, model: str) -> str:
     """Async HuggingFace text generation with automatic model fallback."""
     token = await _hf_key(db)
-
-    # Build ordered list: requested model first, then remaining fallbacks
     models_to_try = [model] + [m for m in HF_TEXT_FALLBACKS if m != model]
-
     return await asyncio.to_thread(_hf_chat_sync, token, prompt, models_to_try)
 
 
@@ -331,7 +332,7 @@ async def generate_product_draft(
     draft: dict = {}
     last_exc: Exception | None = None
 
-    # Resolve provider from DB settings
+    # Resolve provider and settings once before the retry loop
     settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0})
     text_provider = (settings or {}).get("ai", {}).get("text_provider", "groq") if settings else "groq"
 
@@ -432,10 +433,13 @@ async def generate_product_draft(
 
 # ---------------------------------------------------------------------------
 # Image generation — Google Gemini
+#
+# _gemini_image_call runs in a sync thread via asyncio.to_thread(), so we
+# resolve the API key async BEFORE entering the thread and pass it in directly.
 # ---------------------------------------------------------------------------
 
 def _gemini_image_call(
-    db, system: str, prompt: str, image_bytes: bytes, model: str
+    key: str, system: str, prompt: str, image_bytes: bytes, model: str
 ) -> Optional[bytes]:
     """Synchronous Gemini call; run in a thread from async code."""
     try:
@@ -444,7 +448,7 @@ def _gemini_image_call(
     except ImportError as e:
         raise RuntimeError("google-genai package not installed") from e
 
-    client = genai.Client(api_key=_gemini_key(db))
+    client = genai.Client(api_key=key)
     image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/png")
     contents = [system + "\n\n" + prompt, image_part]
     resp = client.models.generate_content(
@@ -468,10 +472,11 @@ def _gemini_image_call(
 
 async def enhance_image(db, image_bytes: bytes) -> Optional[bytes]:
     tpl = await _get_template(db, PT_IMAGE_ENHANCE)
+    key = await _gemini_key(db)
     try:
         return await asyncio.to_thread(
             _gemini_image_call,
-            db,
+            key,
             tpl["system_prompt"],
             tpl["user_prompt_template"],
             image_bytes,
@@ -484,11 +489,12 @@ async def enhance_image(db, image_bytes: bytes) -> Optional[bytes]:
 
 async def generate_alternate_view(db, image_bytes: bytes, view: str) -> Optional[bytes]:
     tpl = await _get_template(db, PT_IMAGE_ALTERNATE)
+    key = await _gemini_key(db)
     prompt = fmt(tpl["user_prompt_template"], view=view)
     try:
         return await asyncio.to_thread(
             _gemini_image_call,
-            db,
+            key,
             tpl["system_prompt"],
             prompt,
             image_bytes,
@@ -501,6 +507,7 @@ async def generate_alternate_view(db, image_bytes: bytes, view: str) -> Optional
 
 # ---------------------------------------------------------------------------
 # Image generation — HuggingFace (free / open-source)
+# Same pattern: resolve token async before entering the sync thread.
 # ---------------------------------------------------------------------------
 
 def _hf_text_to_image(token: str | None, prompt: str, model: str) -> bytes:
