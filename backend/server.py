@@ -1226,11 +1226,13 @@ async def activity_logs(
         query["item_type"] = item_type
     logs = await db.activity_logs.find(query, {"_id": 0}).sort("timestamp", -1).to_list(limit)
     # Enrich with user names if missing
-    for log in logs:
-        if not log.get("user_name") and log.get("user_id"):
-            user_record = await db.users.find_one({"id": log["user_id"]}, {"_id": 0, "name": 1})
-            if user_record:
-                log["user_name"] = user_record.get("name")
+    user_ids_to_fetch = [log["user_id"] for log in logs if log.get("user_id") and not log.get("user_name")]
+    if user_ids_to_fetch:
+        users = await db.users.find({"id": {"$in": user_ids_to_fetch}}, {"_id": 0, "id": 1, "name": 1}).to_list(len(user_ids_to_fetch))
+        user_map = {u["id"]: u.get("name") for u in users}
+        for log in logs:
+            if log.get("user_id") and not log.get("user_name"):
+                log["user_name"] = user_map.get(log["user_id"], log["user_id"])
     return logs
 
 
