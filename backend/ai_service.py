@@ -136,7 +136,7 @@ def _hf_text_generation(db, prompt: str, model: str) -> str:
     token = _hf_key(db)
     try:
         inference = InferenceApi(repo_id=model, token=token)
-        response = inference(inputs=prompt, task="text-generation")
+        response = inference(prompt)
         if isinstance(response, list):
             return response[0].get("generated_text", "")
         return str(response)
@@ -148,7 +148,7 @@ def _hf_text_generation(db, prompt: str, model: str) -> str:
             try:
                 logger.info("Trying fallback model: %s", fallback)
                 inference = InferenceApi(repo_id=fallback, token=token)
-                response = inference(inputs=prompt, task="text-generation")
+                response = inference(prompt)
                 if isinstance(response, list):
                     result = response[0].get("generated_text", "")
                 else:
