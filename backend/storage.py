@@ -55,7 +55,7 @@ def _r2_client():
 
 
 def _r2_bucket() -> str:
-    return os.environ.get("R2_BUCKET", "gems-luxury")
+    return os.environ.get("R2_BUCKET", "gems-luxury-images")
 
 
 # ---------------------------------------------------------------------------
