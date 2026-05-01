@@ -347,10 +347,10 @@ class _Collection:
     async def find_one(
         self, filter_: dict | None = None, projection: dict | None = None
     ) -> dict | None:
-        where, params = _build_where(filter_)
+        where, _ = _build_where(filter_)
         sql = f"SELECT doc FROM {self.table} {where} LIMIT 1"
         async with _acquire_conn() as c:
-            row = await c.fetchrow(sql, *params)
+            row = await c.fetchrow(sql)
         if not row:
             return None
         doc = row["doc"]
@@ -370,18 +370,18 @@ class _Collection:
         sort: list[tuple[str, int]] | None,
         limit: int | None,
     ) -> list[dict]:
-        where, params = _build_where(filter_)
+        where, _ = _build_where(filter_)
         order = ""
         if sort:
             parts = []
             for f, d in sort:
-                direction = "DESC" if d < 0 else "ASC"
-                parts.append(f"doc->>'{f}' {direction}")
+                direction_sql = "DESC" if d < 0 else "ASC"
+                parts.append(f"doc->>'{f}' {direction_sql}")
             order = "ORDER BY " + ", ".join(parts)
         lim = f"LIMIT {int(limit)}" if limit else ""
         sql = f"SELECT doc FROM {self.table} {where} {order} {lim}".strip()
         async with _acquire_conn() as c:
-            rows = await c.fetch(sql, *params)
+            rows = await c.fetch(sql)
         out: list[dict] = []
         for r in rows:
             doc = r["doc"]
@@ -391,19 +391,20 @@ class _Collection:
         return out
 
     async def count_documents(self, filter_: dict | None = None) -> int:
-        where, params = _build_where(filter_)
+        where, _ = _build_where(filter_)
         sql = f"SELECT COUNT(*) AS n FROM {self.table} {where}"
         async with _acquire_conn() as c:
-            row = await c.fetchrow(sql, *params)
+            row = await c.fetchrow(sql)
         return int(row["n"]) if row else 0
 
     async def insert_one(self, doc: dict) -> dict:
         if "id" not in doc:
             raise ValueError("doc must include 'id' field")
-        payload = json.dumps(doc, default=str)
-        sql = f"INSERT INTO {self.table} (id, doc) VALUES ($1, $2::jsonb)"
+        id_lit = _pg_literal(doc["id"])
+        json_lit = _pg_literal(json.dumps(doc, default=str))
+        sql = f"INSERT INTO {self.table} (id, doc) VALUES ({id_lit}, {json_lit}::jsonb)"
         async with _acquire_conn() as c:
-            await c.execute(sql, doc["id"], payload)
+            await c.execute(sql)
         return doc
 
     async def update_one(
@@ -415,40 +416,32 @@ class _Collection:
         set_obj = update.get("$set") or {}
         inc_obj = update.get("$inc") or {}
 
-        # Build SET expression incrementally
+        # Build SET expression using inline SQL literals — no $N params.
+        # Supavisor (transaction pooler) cannot determine data types for
+        # untyped $N parameters in non-prepared queries (IndeterminateDatatypeError).
         set_doc_expr = "doc"
-        params: list[Any] = []
 
-        def _next() -> str:
-            return f"${len(params) + 1}"
-
-        # Apply $inc first
+        # Apply $inc first (inline numeric literals)
         for field, delta in inc_obj.items():
-            params.append(delta)
+            if isinstance(delta, float):
+                delta_sql = repr(delta)
+            else:
+                delta_sql = str(int(delta))
             set_doc_expr = (
                 f"jsonb_set({set_doc_expr}, '{{{field}}}', "
-                f"to_jsonb(COALESCE(({set_doc_expr}->>'{field}')::numeric, 0) + {_next()}))"
+                f"to_jsonb(COALESCE(({set_doc_expr}->>'{field}')::numeric, 0) + {delta_sql}))"
             )
-        # Then merge $set on top
+
+        # Then merge $set on top (inline JSON literal)
         if set_obj:
-            params.append(json.dumps(set_obj, default=str))
-            set_doc_expr = f"({set_doc_expr} || {_next()}::jsonb)"
+            json_lit = _pg_literal(json.dumps(set_obj, default=str))
+            set_doc_expr = f"({set_doc_expr} || {json_lit}::jsonb)"
 
-        where, where_params = _build_where(filter_)
-        # Re-number where params relative to current params length
-        if where_params:
-            offset = len(params)
-            # rewrite $N -> $(N+offset)
-            def _shift(m: re.Match) -> str:
-                n = int(m.group(1))
-                return f"${n + offset}"
-
-            where = re.sub(r"\$(\d+)", _shift, where)
-            params.extend(where_params)
+        where, _ = _build_where(filter_)  # _build_where already inlines all values
 
         sql = f"UPDATE {self.table} SET doc = {set_doc_expr} {where}"
         async with _acquire_conn() as c:
-            res = await c.execute(sql, *params)
+            res = await c.execute(sql)
         # res like 'UPDATE N'
         try:
             matched = int(res.rsplit(" ", 1)[1])
@@ -472,10 +465,10 @@ class _Collection:
         return _UpdateResult(matched=matched, modified=matched)
 
     async def delete_one(self, filter_: dict) -> _UpdateResult:
-        where, params = _build_where(filter_)
+        where, _ = _build_where(filter_)  # all values already inlined
         sql = f"DELETE FROM {self.table} {where}"
         async with _acquire_conn() as c:
-            res = await c.execute(sql, *params)
+            res = await c.execute(sql)
         try:
             n = int(res.rsplit(" ", 1)[1])
         except Exception:
