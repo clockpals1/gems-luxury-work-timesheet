@@ -203,7 +203,7 @@ async def generate_product_draft(
     last_exc: Exception | None = None
 
     # Check which provider to use
-    settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
+    settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0})
     text_provider = (settings or {}).get("ai", {}).get("text_provider", "huggingface") if settings else "huggingface"
 
     for attempt in range(max_retries + 1):
