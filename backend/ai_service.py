@@ -130,25 +130,14 @@ async def _get_template(db, key: str) -> dict:
 def _hf_text_generation(db, prompt: str, model: str) -> str:
     """Synchronous HuggingFace text generation call; run in a thread."""
     try:
-        from huggingface_hub.inference_api import InferenceApi
+        from huggingface_hub import InferenceClient
     except ImportError as e:
         raise RuntimeError("huggingface_hub package not installed") from e
     token = _hf_key(db)
     try:
-        inference = InferenceApi(repo_id=model, token=token)
-        response = inference(prompt, raw_response=True)
-        # Parse the raw response
-        if hasattr(response, 'json'):
-            try:
-                data = response.json()
-                if isinstance(data, list):
-                    return data[0].get("generated_text", "")
-                elif isinstance(data, dict):
-                    return data.get("generated_text", str(data))
-            except:
-                pass
-        # If JSON parsing fails, return text
-        return response.text if hasattr(response, 'text') else str(response)
+        client = InferenceClient(token=token)
+        response = client.text_generation(prompt, model=model, max_new_tokens=512)
+        return response
     except Exception as e:
         # If the model fails, try a fallback model
         logger.warning("Primary model %s failed: %s, trying fallback", model, e)
@@ -156,23 +145,9 @@ def _hf_text_generation(db, prompt: str, model: str) -> str:
         for fallback in fallback_models:
             try:
                 logger.info("Trying fallback model: %s", fallback)
-                inference = InferenceApi(repo_id=fallback, token=token)
-                response = inference(prompt, raw_response=True)
-                if hasattr(response, 'json'):
-                    try:
-                        data = response.json()
-                        if isinstance(data, list):
-                            result = data[0].get("generated_text", "")
-                        elif isinstance(data, dict):
-                            result = data.get("generated_text", str(data))
-                        else:
-                            result = str(data)
-                    except:
-                        result = response.text if hasattr(response, 'text') else str(response)
-                else:
-                    result = str(response)
+                response = client.text_generation(prompt, model=fallback, max_new_tokens=512)
                 logger.info("Fallback model %s succeeded", fallback)
-                return result
+                return response
             except Exception as fe:
                 logger.warning("Fallback model %s also failed: %s", fallback, fe)
         raise e
