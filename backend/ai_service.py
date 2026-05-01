@@ -30,7 +30,7 @@ GEMINI_IMAGE_MODEL = "gemini-2.0-flash-exp"
 # HuggingFace free-tier models
 HF_TXT2IMG_MODEL = "black-forest-labs/FLUX.1-schnell"  # best free text-to-image
 HF_IMG2IMG_MODEL = "timbrooks/instruct-pix2pix"         # free image-to-image
-HF_TEXT_MODEL = "gpt2"   # basic model that works on free inference API
+HF_TEXT_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct:fastest"  # supported on Inference Providers
 
 # Prompt template keys
 PT_PRODUCT_DRAFT = "product_draft"
@@ -128,28 +128,39 @@ async def _get_template(db, key: str) -> dict:
 
 
 def _hf_text_generation(db, prompt: str, model: str) -> str:
-    """Synchronous HuggingFace text generation call; run in a thread."""
+    """Synchronous HuggingFace text generation call using OpenAI-compatible router endpoint."""
     try:
-        from huggingface_hub import InferenceClient
+        from openai import OpenAI
     except ImportError as e:
-        raise RuntimeError("huggingface_hub package not installed") from e
+        raise RuntimeError("openai package not installed") from e
     token = _hf_key(db)
     try:
-        client = InferenceClient(token=token)
-        response = client.text_generation(prompt, model=model, max_new_tokens=512)
-        return response
+        client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=token or "dummy")
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=512
+        )
+        return completion.choices[0].message.content
     except Exception as e:
         # If the model fails, try a fallback model
         logger.warning("Primary model %s failed: %s, trying fallback", model, e)
-        fallback_models = ["gpt2", "distilgpt2"]
+        fallback_models = ["meta-llama/Meta-Llama-3.1-8B-Instruct:cheapest", "Qwen/Qwen2.5-3B-Instruct:fastest"]
         for fallback in fallback_models:
             try:
                 logger.info("Trying fallback model: %s", fallback)
-                response = client.text_generation(prompt, model=fallback, max_new_tokens=512)
+                completion = client.chat.completions.create(
+                    model=fallback,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=512
+                )
                 logger.info("Fallback model %s succeeded", fallback)
-                return response
+                return completion.choices[0].message.content
             except Exception as fe:
                 logger.warning("Fallback model %s also failed: %s", fallback, fe)
+        # Provide more specific error message
+        if "404" in str(e) or "Not Found" in str(e):
+            raise RuntimeError(f"Model {model} not found or not supported on HuggingFace Inference Providers. Check if the model ID is correct and supported. Error: {e}")
         raise e
 
 

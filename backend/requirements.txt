@@ -26,6 +26,7 @@ apscheduler==3.10.4
 # AI providers
 anthropic==0.39.0
 google-genai==0.3.0
+openai==1.54.0
 
 # Storage — Cloudflare R2 (S3-compatible)
 boto3==1.35.93
