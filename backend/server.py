@@ -275,26 +275,36 @@ async def logout(user: dict = Depends(get_current_user)):
 # ---------- Admin: Users ----------
 @api.get("/admin/users")
 async def list_users(user: dict = Depends(require_role("admin", "manager"))):
-    users = await db.users.find({"is_deleted": {"$ne": True}}, {"_id": 0, "password_hash": 0}).to_list(1000)
+    try:
+        users = await db.users.find({"is_deleted": {"$ne": True}}, {"_id": 0, "password_hash": 0}).to_list(1000)
+    except Exception as e:
+        logger.exception("list_users DB error: %s", e)
+        raise HTTPException(503, "Database unavailable, please retry")
     return users
 
 
 @api.post("/admin/users")
 async def create_user(body: CreateUserIn, user: dict = Depends(require_role("admin"))):
-    if await db.users.find_one({"email": body.email.lower()}):
-        raise HTTPException(400, "Email exists")
-    doc = {
-        "id": new_id(),
-        "email": body.email.lower(),
-        "name": body.name,
-        "role": body.role,
-        "active": True,
-        "password_hash": hash_pw(body.password),
-        "created_at": iso(now_utc()),
-        "created_by": user["id"],
-        "is_deleted": False,
-    }
-    await db.users.insert_one(doc)
+    try:
+        if await db.users.find_one({"email": body.email.lower()}):
+            raise HTTPException(400, "Email exists")
+        doc = {
+            "id": new_id(),
+            "email": body.email.lower(),
+            "name": body.name,
+            "role": body.role,
+            "active": True,
+            "password_hash": hash_pw(body.password),
+            "created_at": iso(now_utc()),
+            "created_by": user["id"],
+            "is_deleted": False,
+        }
+        await db.users.insert_one(doc)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("create_user DB error: %s", e)
+        raise HTTPException(503, "Database unavailable, please retry")
     await log_activity(user["id"], "user_created", {"email": doc["email"], "role": doc["role"]}, "user", doc["id"])
     doc.pop("password_hash")
     doc.pop("_id", None)
@@ -310,7 +320,11 @@ async def update_user(user_id: str, body: UpdateUserIn, user: dict = Depends(req
     if body.password: update["password_hash"] = hash_pw(body.password)
     update["updated_at"] = iso(now_utc())
     update["updated_by"] = user["id"]
-    res = await db.users.update_one({"id": user_id}, {"$set": update})
+    try:
+        res = await db.users.update_one({"id": user_id}, {"$set": update})
+    except Exception as e:
+        logger.exception("update_user DB error: %s", e)
+        raise HTTPException(503, "Database unavailable, please retry")
     if not res.matched_count:
         raise HTTPException(404, "User not found")
     await log_activity(user["id"], "user_updated", {k: v for k, v in update.items() if k != "password_hash"}, "user", user_id)
