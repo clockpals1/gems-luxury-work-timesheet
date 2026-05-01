@@ -130,24 +130,31 @@ async def _get_template(db, key: str) -> dict:
 def _hf_text_generation(db, prompt: str, model: str) -> str:
     """Synchronous HuggingFace text generation call; run in a thread."""
     try:
-        from huggingface_hub import InferenceClient
+        from huggingface_hub.inference_api import InferenceApi
     except ImportError as e:
         raise RuntimeError("huggingface_hub package not installed") from e
-    client = InferenceClient(model=model, token=_hf_key(db))
+    token = _hf_key(db)
     try:
-        response = client.text_generation(prompt, max_new_tokens=1024, return_full_text=False)
-        return response
+        inference = InferenceApi(repo_id=model, token=token)
+        response = inference(inputs=prompt, task="text-generation")
+        if isinstance(response, list):
+            return response[0].get("generated_text", "")
+        return str(response)
     except Exception as e:
         # If the model fails, try a fallback model
         logger.warning("Primary model %s failed: %s, trying fallback", model, e)
-        fallback_models = ["meta-llama/Llama-3.2-3B-Instruct", "Qwen/Qwen2.5-3B-Instruct"]
+        fallback_models = ["gpt2", "distilgpt2"]
         for fallback in fallback_models:
             try:
                 logger.info("Trying fallback model: %s", fallback)
-                client = InferenceClient(model=fallback, token=_hf_key(db))
-                response = client.text_generation(prompt, max_new_tokens=1024, return_full_text=False)
+                inference = InferenceApi(repo_id=fallback, token=token)
+                response = inference(inputs=prompt, task="text-generation")
+                if isinstance(response, list):
+                    result = response[0].get("generated_text", "")
+                else:
+                    result = str(response)
                 logger.info("Fallback model %s succeeded", fallback)
-                return response
+                return result
             except Exception as fe:
                 logger.warning("Fallback model %s also failed: %s", fallback, fe)
         raise e
