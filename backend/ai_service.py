@@ -134,8 +134,10 @@ def _hf_text_generation(db, prompt: str, model: str) -> str:
     except ImportError as e:
         raise RuntimeError("openai package not installed") from e
     token = _hf_key(db)
+    if not token:
+        raise RuntimeError("HuggingFace API key is required for Inference Providers. Add it in Admin Settings → AI Settings or set HUGGINGFACE_API_KEY environment variable.")
     try:
-        client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=token or "dummy")
+        client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=token)
         completion = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
@@ -158,7 +160,9 @@ def _hf_text_generation(db, prompt: str, model: str) -> str:
                 return completion.choices[0].message.content
             except Exception as fe:
                 logger.warning("Fallback model %s also failed: %s", fallback, fe)
-        # Provide more specific error message
+        # Provide more specific error messages
+        if "401" in str(e) or "Invalid username or password" in str(e):
+            raise RuntimeError(f"HuggingFace API key is invalid or expired. Update it in Admin Settings → AI Settings. Error: {e}")
         if "404" in str(e) or "Not Found" in str(e):
             raise RuntimeError(f"Model {model} not found or not supported on HuggingFace Inference Providers. Check if the model ID is correct and supported. Error: {e}")
         raise e
