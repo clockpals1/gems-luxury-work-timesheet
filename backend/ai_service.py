@@ -24,7 +24,7 @@ from rapidfuzz import fuzz
 
 logger = logging.getLogger(__name__)
 
-CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
+CLAUDE_MODEL = "claude-3-5-sonnet-20241022"
 GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image-preview"
 
 # HuggingFace free-tier models

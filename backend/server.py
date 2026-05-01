@@ -1,6 +1,7 @@
 """Gems & Luxury — internal staff platform backend."""
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 import logging
@@ -72,6 +73,14 @@ def iso(dt: datetime) -> str:
 
 def new_id() -> str:
     return str(uuid.uuid4())
+
+
+def parse_utc_datetime(s: str) -> datetime:
+    """Parse ISO datetime string to timezone-aware UTC datetime."""
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def hash_pw(pw: str) -> str:
@@ -394,11 +403,11 @@ async def punch_out(user: dict = Depends(get_current_user)):
     ob = await _open_break(att["id"])
     if ob:
         now = now_utc()
-        mins = int((now - datetime.fromisoformat(ob["start"])).total_seconds() // 60)
+        mins = int((now - parse_utc_datetime(ob["start"])).total_seconds() // 60)
         await db.break_logs.update_one({"id": ob["id"]}, {"$set": {"end": iso(now), "minutes": mins}})
         await db.attendance_logs.update_one({"id": att["id"]}, {"$inc": {"break_minutes": mins}})
     now = now_utc()
-    total = int((now - datetime.fromisoformat(att["punch_in"])).total_seconds() // 60)
+    total = int((now - parse_utc_datetime(att["punch_in"])).total_seconds() // 60)
     await db.attendance_logs.update_one(
         {"id": att["id"]},
         {"$set": {"punch_out": iso(now), "total_minutes": total, "last_activity": iso(now)}},
@@ -430,7 +439,7 @@ async def break_end(user: dict = Depends(get_current_user)):
     if not ob:
         raise HTTPException(400, "Not on break")
     now = now_utc()
-    mins = max(1, int((now - datetime.fromisoformat(ob["start"])).total_seconds() // 60))
+    mins = max(1, int((now - parse_utc_datetime(ob["start"])).total_seconds() // 60))
     await db.break_logs.update_one({"id": ob["id"]}, {"$set": {"end": iso(now), "minutes": mins}})
     await db.attendance_logs.update_one({"id": att["id"]}, {"$inc": {"break_minutes": mins}, "$set": {"last_activity": iso(now)}})
     await log_activity(user["id"], "break_end", {"minutes": mins}, "attendance", att["id"])
@@ -457,7 +466,7 @@ async def attendance_me(user: dict = Depends(get_current_user)):
     ).to_list(100)
     total_today = sum(a.get("total_minutes", 0) for a in today if a.get("punch_out"))
     if att:
-        total_today += int((now_utc() - datetime.fromisoformat(att["punch_in"])).total_seconds() // 60)
+        total_today += int((now_utc() - parse_utc_datetime(att["punch_in"])).total_seconds() // 60)
     # products today
     products_today = await db.generated_products.count_documents({
         "generated_by_user_id": user["id"],
@@ -469,7 +478,7 @@ async def attendance_me(user: dict = Depends(get_current_user)):
     warning_seconds = settings.get("warning_seconds", 300)
     idle_in_seconds = None
     if att and not open_break:
-        last = datetime.fromisoformat(att["last_activity"])
+        last = parse_utc_datetime(att["last_activity"])
         elapsed = (now_utc() - last).total_seconds()
         idle_in_seconds = max(0, idle_timeout * 60 - elapsed)
     return {
@@ -490,12 +499,12 @@ async def auto_punch_out_sweep():
     cutoff = now_utc() - timedelta(minutes=idle_timeout)
     opens = await db.attendance_logs.find({"punch_out": None}, {"_id": 0}).to_list(1000)
     for att in opens:
-        last = datetime.fromisoformat(att["last_activity"])
+        last = parse_utc_datetime(att["last_activity"])
         if last < cutoff:
             # skip if on break
             if await _open_break(att["id"]):
                 continue
-            total = int((last - datetime.fromisoformat(att["punch_in"])).total_seconds() // 60)
+            total = int((last - parse_utc_datetime(att["punch_in"])).total_seconds() // 60)
             await db.attendance_logs.update_one(
                 {"id": att["id"]},
                 {"$set": {"punch_out": iso(last), "total_minutes": total, "auto_punched_out": True}},
@@ -576,20 +585,26 @@ async def generate_product(body: GenerateProductIn, user: dict = Depends(get_cur
         raise HTTPException(503, f"DB insert failed: {e}")
     # Mark image assigned
     if image_asset:
-        await db.image_assets.update_one(
-            {"id": image_asset["id"]},
-            {"$set": {"status": "assigned"}, "$inc": {"assigned_count": 1}},
-        )
-        await db.image_assignments.insert_one({
-            "id": new_id(),
-            "image_asset_id": image_asset["id"],
-            "product_id": doc["id"],
-            "user_id": user["id"],
-            "assigned_at": iso(now_utc()),
-        })
+        try:
+            await db.image_assets.update_one(
+                {"id": image_asset["id"]},
+                {"$set": {"status": "assigned"}, "$inc": {"assigned_count": 1}},
+            )
+            await db.image_assignments.insert_one({
+                "id": new_id(),
+                "image_asset_id": image_asset["id"],
+                "product_id": doc["id"],
+                "user_id": user["id"],
+                "assigned_at": iso(now_utc()),
+            })
+        except Exception as e:
+            logger.exception("image assignment failed (non-fatal): %s", e)
     # update activity
     if att:
-        await db.attendance_logs.update_one({"id": att["id"]}, {"$set": {"last_activity": iso(now_utc())}})
+        try:
+            await db.attendance_logs.update_one({"id": att["id"]}, {"$set": {"last_activity": iso(now_utc())}})
+        except Exception as e:
+            logger.exception("attendance update failed (non-fatal): %s", e)
     await log_activity(user["id"], "product_generated", {"name": doc["name"], "price": doc["final_price"]}, "product", doc["id"])
     doc.pop("_id", None)
     # strip pricing_meta for worker output
@@ -901,7 +916,12 @@ async def upload_images_bulk(
                 "uploaded_by": user["id"],
                 "uploaded_at": iso(now_utc()),
             }
-            await db.image_assets.insert_one(doc)
+            try:
+                await db.image_assets.insert_one(doc)
+            except Exception as e:
+                logger.exception("bulk upload DB insert failed for file %s: %s", f.filename, e)
+                errors.append({"filename": f.filename, "error": f"DB insert failed: {e}"})
+                continue
             doc.pop("_id", None)
             out.append(doc)
             await log_activity(user["id"], "image_uploaded", {"filename": f.filename, "bulk": True}, "image", doc["id"])
@@ -1089,7 +1109,7 @@ async def dashboard_stats(user: dict = Depends(require_role("admin", "manager"))
         for a in open_atts:
             if a["id"] in on_break_set:
                 continue
-            if datetime.fromisoformat(a["last_activity"]) < idle_cutoff:
+            if parse_utc_datetime(a["last_activity"]) < idle_cutoff:
                 idle += 1
     products_today = await db.generated_products.count_documents({"generated_at": {"$gte": iso(today)}})
     products_week = await db.generated_products.count_documents({"generated_at": {"$gte": iso(week)}})
@@ -1119,7 +1139,7 @@ async def live_users(user: dict = Depends(require_role("admin", "manager"))):
         on_break_set = {b["attendance_id"] for b in breaks}
     out = []
     for a in open_atts:
-        state = "on_break" if a["id"] in on_break_set else ("idle" if datetime.fromisoformat(a["last_activity"]) < idle_cutoff else "active")
+        state = "on_break" if a["id"] in on_break_set else ("idle" if parse_utc_datetime(a["last_activity"]) < idle_cutoff else "active")
         out.append({"user_id": a["user_id"], "user_name": a["user_name"], "state": state,
                     "punch_in": a["punch_in"], "last_activity": a["last_activity"], "attendance_id": a["id"]})
     return out
@@ -1136,7 +1156,7 @@ async def force_punch_out(att_id: str, user: dict = Depends(require_role("admin"
     if not att or att.get("punch_out"):
         raise HTTPException(400, "Not an open session")
     now = now_utc()
-    total = int((now - datetime.fromisoformat(att["punch_in"])).total_seconds() // 60)
+    total = int((now - parse_utc_datetime(att["punch_in"])).total_seconds() // 60)
     await db.attendance_logs.update_one({"id": att_id}, {"$set": {"punch_out": iso(now), "total_minutes": total, "force_out_by": user["id"]}})
     await log_activity(user["id"], "force_punch_out", {"target_user": att["user_id"]}, "attendance", att_id)
     return {"ok": True}
@@ -1249,7 +1269,7 @@ async def timesheet_data(
         a = agg[r["user_id"]]
         a["name"] = r["user_name"]
         mins = r.get("total_minutes") or (
-            int((now_utc() - datetime.fromisoformat(r["punch_in"])).total_seconds() // 60) if not r.get("punch_out") else 0
+            int((now_utc() - parse_utc_datetime(r["punch_in"])).total_seconds() // 60) if not r.get("punch_out") else 0
         )
         a["minutes"] += mins
         a["breaks"] += r.get("break_minutes", 0)
@@ -1272,8 +1292,8 @@ async def timesheet_data(
     # Build per-day detail with product counts
     detail = []
     for r in rows:
-        pin = datetime.fromisoformat(r["punch_in"])
-        pout = datetime.fromisoformat(r["punch_out"]) if r.get("punch_out") else None
+        pin = parse_utc_datetime(r["punch_in"])
+        pout = parse_utc_datetime(r["punch_out"]) if r.get("punch_out") else None
         mins = r.get("total_minutes") or (int((now_utc() - pin).total_seconds() // 60) if not pout else 0)
         hours = f"{mins // 60}h {mins % 60:02d}m"
         detail.append({
@@ -1305,84 +1325,105 @@ async def timesheet_data(
 # ---------- Seed ----------
 async def seed():
     # admin
-    if not await db.users.find_one({"email": "admin@gemsandluxury.com"}):
-        await db.users.insert_one({
-            "id": new_id(), "email": "admin@gemsandluxury.com", "name": "Gems Admin",
-            "role": "admin", "active": True, "password_hash": hash_pw("Admin@123"),
-            "created_at": iso(now_utc()), "is_deleted": False,
-        })
-        logger.info("seeded admin")
-    if not await db.users.find_one({"email": "worker@gemsandluxury.com"}):
-        await db.users.insert_one({
-            "id": new_id(), "email": "worker@gemsandluxury.com", "name": "Amara Worker",
-            "role": "worker", "active": True, "password_hash": hash_pw("Worker@123"),
-            "created_at": iso(now_utc()), "is_deleted": False,
-        })
-        logger.info("seeded worker")
+    try:
+        if not await db.users.find_one({"email": "admin@gemsandluxury.com"}):
+            await db.users.insert_one({
+                "id": new_id(), "email": "admin@gemsandluxury.com", "name": "Gems Admin",
+                "role": "admin", "active": True, "password_hash": hash_pw("Admin@123"),
+                "created_at": iso(now_utc()), "is_deleted": False,
+            })
+            logger.info("seeded admin")
+    except Exception as e:
+        logger.exception("seed admin failed: %s", e)
+    try:
+        if not await db.users.find_one({"email": "worker@gemsandluxury.com"}):
+            await db.users.insert_one({
+                "id": new_id(), "email": "worker@gemsandluxury.com", "name": "Amara Worker",
+                "role": "worker", "active": True, "password_hash": hash_pw("Worker@123"),
+                "created_at": iso(now_utc()), "is_deleted": False,
+            })
+            logger.info("seeded worker")
+    except Exception as e:
+        logger.exception("seed worker failed: %s", e)
     # settings
-    if not await db.admin_settings.find_one({"id": "global"}):
-        await db.admin_settings.insert_one({
-            "id": "global",
-            "idle_timeout_minutes": 60,
-            "warning_seconds": 300,
-            "max_break_minutes": 30,
-            "currency": "USD",
-            "features": {"ai_images": True, "alternates": True, "admin_pricing_reveal": True},
-            "created_at": iso(now_utc()),
-        })
+    try:
+        if not await db.admin_settings.find_one({"id": "global"}):
+            await db.admin_settings.insert_one({
+                "id": "global",
+                "idle_timeout_minutes": 60,
+                "warning_seconds": 300,
+                "max_break_minutes": 30,
+                "currency": "USD",
+                "features": {"ai_images": True, "alternates": True, "admin_pricing_reveal": True},
+                "created_at": iso(now_utc()),
+            })
+    except Exception as e:
+        logger.exception("seed settings failed: %s", e)
     # pricing
-    if not await db.pricing_rules.find_one({"id": "global"}):
-        await db.pricing_rules.insert_one({
-            "id": "global", "min_price": 40, "max_price": 150, "currency": "USD",
-            "category_multipliers": {
-                "Women / Dresses / Occasion": 1.1,
-                "Women / Gowns / Ceremony": 1.25,
-                "Men / Agbada": 1.2,
-                "Accessories / Headwrap": 0.6,
-            },
-            "created_at": iso(now_utc()),
-        })
+    try:
+        if not await db.pricing_rules.find_one({"id": "global"}):
+            await db.pricing_rules.insert_one({
+                "id": "global", "min_price": 40, "max_price": 150, "currency": "USD",
+                "category_multipliers": {
+                    "Women / Dresses / Occasion": 1.1,
+                    "Women / Gowns / Ceremony": 1.25,
+                    "Men / Agbada": 1.2,
+                    "Accessories / Headwrap": 0.6,
+                },
+                "created_at": iso(now_utc()),
+            })
+    except Exception as e:
+        logger.exception("seed pricing failed: %s", e)
     # categories
-    if await db.product_categories.count_documents({}) == 0:
-        cats = [
-            ("Women / Dresses / Occasion", "women-dresses-occasion", ["XS","S","M","L","XL"], 1.10),
-            ("Women / Gowns / Ceremony", "women-gowns-ceremony", ["S","M","L","XL","XXL"], 1.25),
-            ("Women / Kaftan", "women-kaftan", ["S","M","L","XL"], 1.00),
-            ("Men / Agbada", "men-agbada", ["M","L","XL","XXL"], 1.20),
-            ("Men / Dashiki", "men-dashiki", ["S","M","L","XL","XXL"], 0.9),
-            ("Accessories / Headwrap", "accessories-headwrap", ["One Size"], 0.6),
-        ]
-        for n, s, sz, m in cats:
-            await db.product_categories.insert_one({
-                "id": new_id(), "name": n, "slug": s, "sizes": sz, "price_multiplier": m,
-                "active": True, "created_at": iso(now_utc()),
-            })
+    try:
+        if await db.product_categories.count_documents({}) == 0:
+            cats = [
+                ("Women / Dresses / Occasion", "women-dresses-occasion", ["XS","S","M","L","XL"], 1.10),
+                ("Women / Gowns / Ceremony", "women-gowns-ceremony", ["S","M","L","XL","XXL"], 1.25),
+                ("Women / Kaftan", "women-kaftan", ["S","M","L","XL"], 1.00),
+                ("Men / Agbada", "men-agbada", ["M","L","XL","XXL"], 1.20),
+                ("Men / Dashiki", "men-dashiki", ["S","M","L","XL","XXL"], 0.9),
+                ("Accessories / Headwrap", "accessories-headwrap", ["One Size"], 0.6),
+            ]
+            for n, s, sz, m in cats:
+                await db.product_categories.insert_one({
+                    "id": new_id(), "name": n, "slug": s, "sizes": sz, "price_multiplier": m,
+                    "active": True, "created_at": iso(now_utc()),
+                })
+    except Exception as e:
+        logger.exception("seed categories failed: %s", e)
     # naming families
-    if await db.naming_families.count_documents({}) == 0:
-        fams = [
-            ("Ankara", ["Ankara", "Print", "Heritage", "Motif", "Weave"]),
-            ("Royal", ["Royal", "Regal", "Noble", "Crown", "Sovereign"]),
-            ("Luxury", ["Luxury", "Premium", "Opulent", "Prestige", "Elite"]),
-            ("Heritage", ["Heritage", "Legacy", "Origin", "Ancestral", "Tribal"]),
-            ("Silk & Velvet", ["Silk", "Silky", "Velvet", "Satin", "Cashmere"]),
-            ("Couture", ["Couture", "Atelier", "Tailored", "Bespoke", "Haute"]),
-            ("Grace", ["Grace", "Aura", "Poise", "Radiance", "Bloom"]),
-            ("Gold & Afro-luxury", ["Gold", "Gilded", "Afro", "Sunburst", "Amber"]),
-            ("Ceremony & Statement", ["Ceremony", "Gala", "Statement", "Ovation", "Moment"]),
-        ]
-        for n, w in fams:
-            await db.naming_families.insert_one({
-                "id": new_id(), "name": n, "words": w, "enabled": True,
-                "created_at": iso(now_utc()),
-            })
+    try:
+        if await db.naming_families.count_documents({}) == 0:
+            fams = [
+                ("Ankara", ["Ankara", "Print", "Heritage", "Motif", "Weave"]),
+                ("Royal", ["Royal", "Regal", "Noble", "Crown", "Sovereign"]),
+                ("Luxury", ["Luxury", "Premium", "Opulent", "Prestige", "Elite"]),
+                ("Heritage", ["Heritage", "Legacy", "Origin", "Ancestral", "Tribal"]),
+                ("Silk & Velvet", ["Silk", "Silky", "Velvet", "Satin", "Cashmere"]),
+                ("Couture", ["Couture", "Atelier", "Tailored", "Bespoke", "Haute"]),
+                ("Grace", ["Grace", "Aura", "Poise", "Radiance", "Bloom"]),
+                ("Gold & Afro-luxury", ["Gold", "Gilded", "Afro", "Sunburst", "Amber"]),
+                ("Ceremony & Statement", ["Ceremony", "Gala", "Statement", "Ovation", "Moment"]),
+            ]
+            for n, w in fams:
+                await db.naming_families.insert_one({
+                    "id": new_id(), "name": n, "words": w, "enabled": True,
+                    "created_at": iso(now_utc()),
+                })
+    except Exception as e:
+        logger.exception("seed naming families failed: %s", e)
     # prompt templates
-    if await db.prompt_templates.count_documents({}) == 0:
-        for tpl in ai_service.DEFAULT_PROMPTS:
-            await db.prompt_templates.insert_one({
-                "id": new_id(), **tpl,
-                "created_at": iso(now_utc()),
-            })
-        logger.info("seeded prompt templates")
+    try:
+        if await db.prompt_templates.count_documents({}) == 0:
+            for tpl in ai_service.DEFAULT_PROMPTS:
+                await db.prompt_templates.insert_one({
+                    "id": new_id(), **tpl,
+                    "created_at": iso(now_utc()),
+                })
+            logger.info("seeded prompt templates")
+    except Exception as e:
+        logger.exception("seed prompt templates failed: %s", e)
     logger.info("seed complete")
 
 
@@ -1459,7 +1500,7 @@ async def on_stop():
 @app.get("/health")
 async def health() -> dict:
     db_status = await check_db()
-    return {"status": "ok", "deploy_version": "v6-no-params", **db_status}
+    return {"status": "ok", "deploy_version": "v7-critical-fixes", **db_status}
 
 
 # Wrap the ENTIRE FastAPI stack (including Starlette's ServerErrorMiddleware)
