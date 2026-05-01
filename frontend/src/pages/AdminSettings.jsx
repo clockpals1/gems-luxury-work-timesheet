@@ -10,7 +10,7 @@ import { toast } from "sonner";
 
 export default function AdminSettings() {
   const [s, setS] = useState({ idle_timeout_minutes: 60, warning_seconds: 300, max_break_minutes: 30, currency: "USD", features: {}, ai: {} });
-  const [aiSettings, setAiSettings] = useState({ text_provider: "huggingface", image_provider: "huggingface", huggingface_text_model: "meta-llama/Meta-Llama-3.1-8B-Instruct:fastest", anthropic_api_key: "", gemini_api_key: "", huggingface_api_key: "" });
+  const [aiSettings, setAiSettings] = useState({ text_provider: "huggingface", image_provider: "huggingface", huggingface_text_model: "gpt2", anthropic_api_key: "", gemini_api_key: "", huggingface_api_key: "" });
   useEffect(() => { api.get("/admin/settings").then(r => setS(prev => ({ ...prev, ...r.data }))); }, []);
   useEffect(() => { api.get("/admin/settings/ai").then(r => setAiSettings(r.data)).catch(() => {}); }, []);
   const save = async () => {
@@ -83,10 +83,10 @@ export default function AdminSettings() {
                 <Input 
                   value={aiSettings.huggingface_text_model || ""} 
                   onChange={(e) => setAiSettings({ ...aiSettings, huggingface_text_model: e.target.value })}
-                  placeholder="meta-llama/Meta-Llama-3.1-8B-Instruct:fastest"
+                  placeholder="gpt2"
                   className="bg-[#132018] border-[#21362A]"
                 />
-                <div className="text-xs text-[#A1B4A8]">Model ID with policy suffix (e.g., :fastest, :cheapest)</div>
+                <div className="text-xs text-[#A1B4A8]">Free tier models: gpt2, distilgpt2, facebook/opt-125m. Leave API key empty for free tier.</div>
               </div>
               <div className="space-y-2">
                 <Label className="label-overline">Anthropic API Key</Label>

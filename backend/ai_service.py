@@ -30,7 +30,7 @@ GEMINI_IMAGE_MODEL = "gemini-2.0-flash-exp"
 # HuggingFace free-tier models
 HF_TXT2IMG_MODEL = "black-forest-labs/FLUX.1-schnell"  # best free text-to-image
 HF_IMG2IMG_MODEL = "timbrooks/instruct-pix2pix"         # free image-to-image
-HF_TEXT_MODEL_DEFAULT = "meta-llama/Meta-Llama-3.1-8B-Instruct:fastest"  # default model
+HF_TEXT_MODEL_DEFAULT = "gpt2"  # simple model that works on free tier without API key
 
 # Prompt template keys
 PT_PRODUCT_DRAFT = "product_draft"
@@ -128,43 +128,34 @@ async def _get_template(db, key: str) -> dict:
 
 
 def _hf_text_generation(db, prompt: str, model: str) -> str:
-    """Synchronous HuggingFace text generation call using OpenAI-compatible router endpoint."""
+    """Synchronous HuggingFace text generation call using huggingface_hub InferenceClient for free tier."""
     try:
-        from openai import OpenAI
+        from huggingface_hub import InferenceClient
     except ImportError as e:
-        raise RuntimeError("openai package not installed") from e
+        raise RuntimeError("huggingface_hub package not installed") from e
     token = _hf_key(db)
-    if not token:
-        raise RuntimeError("HuggingFace API key is required for Inference Providers. Add it in Admin Settings → AI Settings or set HUGGINGFACE_API_KEY environment variable.")
     try:
-        client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=token)
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=512
-        )
-        return completion.choices[0].message.content
+        # Use InferenceClient which supports free tier without API key for some models
+        client = InferenceClient(token=token)
+        response = client.text_generation(prompt, model=model, max_new_tokens=512)
+        return response
     except Exception as e:
         # If the model fails, try a fallback model
         logger.warning("Primary model %s failed: %s, trying fallback", model, e)
-        fallback_models = ["meta-llama/Meta-Llama-3.1-8B-Instruct:cheapest", "Qwen/Qwen2.5-3B-Instruct:fastest"]
+        fallback_models = ["gpt2", "distilgpt2", "facebook/opt-125m"]
         for fallback in fallback_models:
             try:
                 logger.info("Trying fallback model: %s", fallback)
-                completion = client.chat.completions.create(
-                    model=fallback,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=512
-                )
+                response = client.text_generation(prompt, model=fallback, max_new_tokens=512)
                 logger.info("Fallback model %s succeeded", fallback)
-                return completion.choices[0].message.content
+                return response
             except Exception as fe:
                 logger.warning("Fallback model %s also failed: %s", fallback, fe)
         # Provide more specific error messages
         if "401" in str(e) or "Invalid username or password" in str(e):
-            raise RuntimeError(f"HuggingFace API key is invalid or expired. Update it in Admin Settings → AI Settings. Error: {e}")
+            raise RuntimeError(f"HuggingFace API key authentication failed. Try without an API key for free tier models, or verify your key is correct. Error: {e}")
         if "404" in str(e) or "Not Found" in str(e):
-            raise RuntimeError(f"Model {model} not found or not supported on HuggingFace Inference Providers. Check if the model ID is correct and supported. Error: {e}")
+            raise RuntimeError(f"Model {model} not found. Try a different model like 'gpt2' or 'distilgpt2' for free tier. Error: {e}")
         raise e
 
 
