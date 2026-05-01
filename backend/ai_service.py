@@ -66,11 +66,11 @@ def _gemini_key(db=None) -> str:
     return key
 
 
-def _hf_key(db=None) -> str | None:
+async def _hf_key(db=None) -> str | None:
     """HuggingFace token — optional, improves rate limits but not required."""
     if db:
         try:
-            settings = db.admin_settings.find_one({"id": "global"}, {"_id": 0})
+            settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0})
             if settings and settings.get("ai", {}).get("huggingface_api_key"):
                 return settings["ai"]["huggingface_api_key"]
         except Exception:
@@ -127,13 +127,13 @@ async def _get_template(db, key: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _hf_text_generation(db, prompt: str, model: str) -> str:
+async def _hf_text_generation(db, prompt: str, model: str) -> str:
     """Synchronous HuggingFace text generation call using huggingface_hub InferenceClient for free tier."""
     try:
         from huggingface_hub import InferenceClient
     except ImportError as e:
         raise RuntimeError("huggingface_hub package not installed") from e
-    token = _hf_key(db)
+    token = await _hf_key(db)
     try:
         # Use InferenceClient which supports free tier without API key for some models
         client = InferenceClient(token=token)
@@ -161,7 +161,7 @@ def _hf_text_generation(db, prompt: str, model: str) -> str:
 
 async def _hf_text_generation_async(db, prompt: str, model: str) -> str:
     """Async wrapper for HuggingFace text generation."""
-    return await asyncio.to_thread(_hf_text_generation, db, prompt, model)
+    return await _hf_text_generation(db, prompt, model)
 
 async def _claude_complete(db, system: str, prompt: str, model: str) -> str:
     """Call Anthropic Messages API and return the assistant text."""
