@@ -127,9 +127,9 @@ def require_role(*roles: str):
     return dep
 
 
-async def log_activity(user_id: str, event_type: str, detail: dict | None = None, item_type: str | None = None, item_id: str | None = None):
+async def log_activity(user_id: str, event_type: str, detail: dict | None = None, item_type: str | None = None, item_id: str | None = None, ip_address: str | None = None, user_name: str | None = None):
     try:
-        await db.activity_logs.insert_one({
+        doc = {
             "id": new_id(),
             "user_id": user_id,
             "event_type": event_type,
@@ -137,7 +137,12 @@ async def log_activity(user_id: str, event_type: str, detail: dict | None = None
             "item_id": item_id,
             "detail": detail or {},
             "timestamp": iso(now_utc()),
-        })
+        }
+        if ip_address:
+            doc["ip_address"] = ip_address
+        if user_name:
+            doc["user_name"] = user_name
+        await db.activity_logs.insert_one(doc)
     except Exception as _log_err:
         logger.warning("log_activity failed (non-fatal): %s", _log_err)
 
@@ -1207,8 +1212,22 @@ async def update_ai_settings(body: dict, user: dict = Depends(require_role("admi
 
 
 @api.get("/admin/activity-logs")
-async def activity_logs(user: dict = Depends(require_role("admin", "manager")), limit: int = 200):
-    return await db.activity_logs.find({}, {"_id": 0}).sort("timestamp", -1).to_list(limit)
+async def activity_logs(
+    user: dict = Depends(require_role("admin", "manager")),
+    limit: int = Query(200, ge=1, le=1000),
+    event_type: Optional[str] = Query(None),
+    user_id: Optional[str] = Query(None),
+    item_type: Optional[str] = Query(None),
+):
+    """Get activity logs with filtering options."""
+    query: dict = {}
+    if event_type:
+        query["event_type"] = event_type
+    if user_id:
+        query["user_id"] = user_id
+    if item_type:
+        query["item_type"] = item_type
+    return await db.activity_logs.find(query, {"_id": 0}).sort("timestamp", -1).to_list(limit)
 
 
 # ---------- Prompt templates ----------

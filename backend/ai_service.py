@@ -25,7 +25,7 @@ from rapidfuzz import fuzz
 logger = logging.getLogger(__name__)
 
 CLAUDE_MODEL = "claude-3-5-sonnet-20241022"
-GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image-preview"
+GEMINI_IMAGE_MODEL = "gemini-2.0-flash-exp"
 
 # HuggingFace free-tier models
 HF_TXT2IMG_MODEL = "black-forest-labs/FLUX.1-schnell"  # best free text-to-image
