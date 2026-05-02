@@ -249,7 +249,7 @@ export default function AdminSettings() {
                 placeholder="{group_name}-{seq:02d}"
                 className="bg-[#132018] border-[#21362A]"
               />
-              <div className="text-xs text-[#A1B4A8]">Variables: {group_name}, {seq}, {date}</div>
+              <div className="text-xs text-[#A1B4A8]">Variables: {'{group_name}'}, {'{seq}'}, {'{date}'}</div>
             </div>
           </CardContent>
         </Card>
