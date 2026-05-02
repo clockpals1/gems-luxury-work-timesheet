@@ -111,6 +111,19 @@ export default function AdminProductGroupDetail() {
     }
   };
 
+  const handleConvertToProduct = async () => {
+    setSaving(true);
+    try {
+      const r = await api.post(`/admin/product-groups/${groupId}/convert-to-product`);
+      toast.success("Product group converted to product record");
+      navigate(`/admin/products/${r.data.product.id}`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Failed to convert");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const suggestBaseImage = () => {
     // Suggest the first image as base if none selected
     if (!baseImageId && images.length > 0) {
@@ -171,6 +184,11 @@ export default function AdminProductGroupDetail() {
           <Button onClick={handleSaveReview} disabled={saving} className="bg-[#097969] hover:bg-[#0a8a78]">
             <Check className="w-4 h-4 mr-2"/>{saving ? "Saving..." : "Save Review"}
           </Button>
+          {group?.review_status === "reviewed" && (
+            <Button onClick={handleConvertToProduct} disabled={saving} className="bg-[#D4AF37] hover:bg-[#F0C84A] text-[#050A07]">
+              Convert to Product
+            </Button>
+          )}
         </div>
 
         {/* Image Gallery */}

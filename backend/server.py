@@ -2014,6 +2014,107 @@ async def split_product_group(
     return {"ok": True, "new_group_id": new_group_id}
 
 
+@api.post("/admin/product-groups/{group_id}/convert-to-product")
+async def convert_product_group_to_product(
+    group_id: str,
+    user: dict = Depends(require_role("admin", "manager"))
+):
+    """Convert a reviewed product group into a product record for CSV export."""
+    group = await db.product_groups.find_one({"id": group_id}, {"_id": 0})
+    if not group:
+        raise HTTPException(404, "Product group not found")
+    
+    if group.get("review_status") != "reviewed":
+        raise HTTPException(400, "Product group must be reviewed before conversion")
+    
+    if not group.get("base_image_id"):
+        raise HTTPException(400, "Product group must have a base image selected")
+    
+    # Get CSV export settings
+    settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0}) or {}
+    csv_settings = settings.get("csv", {}) or {}
+    default_brand = csv_settings.get("default_brand", "Gems & Luxury")
+    
+    # Get base image
+    base_image_id = group.get("base_image_id")
+    base_image = await db.image_assets.find_one({"id": base_image_id}, {"_id": 0})
+    
+    # Get additional images
+    additional_image_ids = group.get("additional_image_ids", [])
+    additional_images = []
+    if additional_image_ids:
+        additional_images = await db.image_assets.find({"id": {"$in": additional_image_ids}}, {"_id": 0}).to_list(length=None)
+    
+    # Generate SKU
+    sku = f"{(group.get('category') or 'GEN')[:3].upper()}-{new_id()[:8]}"
+    
+    # Create product record
+    product_doc = {
+        "id": new_id(),
+        "name": group.get("folder_name", "Untitled Product"),
+        "short_title": group.get("folder_name", "Untitled Product"),
+        "short_description": f"{group.get('folder_name', '')} - Premium quality product from Gems & Luxury.",
+        "full_description": f"{group.get('folder_name', '')} - Premium quality product from Gems & Luxury. Made with attention to detail and quality materials.",
+        "category": group.get("category"),
+        "tags": group.get("tags", []),
+        "sizes": ["S", "M", "L", "XL"],
+        "final_price": 150,  # Default price - can be edited
+        "currency": "USD",
+        # CSV export fields
+        "active": True,
+        "is_active": True,
+        "brand": default_brand,
+        "sku": sku,
+        "tax_class": csv_settings.get("default_tax_class", "Taxable Goods"),
+        "special_price": None,
+        "special_price_type": None,
+        "special_price_start": None,
+        "special_price_end": None,
+        "manage_stock": csv_settings.get("default_manage_stock", True),
+        "quantity": csv_settings.get("default_stock_quantity", 100),
+        "in_stock": csv_settings.get("default_in_stock", True),
+        "meta_title": group.get("folder_name", ""),
+        "meta_description": f"{group.get('folder_name', '')} from Gems & Luxury",
+        "meta_keywords": ", ".join(group.get("tags", [])),
+        # Image structure for CSV export
+        "base_image_id": base_image_id,
+        "additional_image_ids": additional_image_ids,
+        # Internal tracking fields
+        "source_image_id": base_image_id,
+        "refined_image_id": None,
+        "variation_image_ids": [],
+        "export_status": "pending",
+        "reviewed_by_admin": True,
+        "session_id": None,
+        "punch_status_at_generation": None,
+        # Legacy fields
+        "image_asset_id": base_image_id,
+        "image_variation_ids": additional_image_ids,
+        "image_workflow_status": "completed",
+        "variation_image_ids": additional_image_ids,
+        "pricing_meta": {},
+        "status": "draft",
+        "generated_by_user_id": user["id"],
+        "generated_by_name": user["name"],
+        "generated_at": iso(now_utc()),
+        # Product group reference
+        "product_group_id": group_id
+    }
+    
+    await db.generated_products.insert_one(product_doc)
+    product_doc.pop("_id", None)
+    
+    # Update product group status
+    await db.product_groups.update_one(
+        {"id": group_id},
+        {"$set": {"review_status": "approved", "converted_to_product_at": iso(now_utc())}}
+    )
+    
+    await log_activity(user["id"], "product_group_converted", {"group_id": group_id, "product_id": product_doc["id"]}, "product_group", group_id)
+    
+    return {"product": product_doc}
+
+
 @api.post("/admin/images/generate")
 async def generate_image_ep(body: GenerateImageIn, user: dict = Depends(require_role("admin", "manager"))):
     """Generate a new product image from a text prompt using HuggingFace FLUX (free)."""
