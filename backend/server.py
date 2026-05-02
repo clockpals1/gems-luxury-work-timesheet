@@ -1391,6 +1391,66 @@ async def reject_product(product_id: str, user: dict = Depends(require_role("adm
     return {"ok": True}
 
 
+@api.get("/admin/workers/productivity")
+async def get_worker_productivity(
+    date_from: str = None,
+    date_to: str = None,
+    worker_id: str = None,
+    user: dict = Depends(require_role("admin", "manager"))
+):
+    """Get worker productivity metrics."""
+    # Build query filter
+    query = {}
+    if date_from or date_to:
+        query["generated_at"] = {}
+        if date_from:
+            query["generated_at"]["$gte"] = date_from
+        if date_to:
+            query["generated_at"]["$lte"] = date_to
+    if worker_id:
+        query["generated_by_user_id"] = worker_id
+    
+    # Get all products matching filter
+    products = await db.generated_products.find(query, {"_id": 0}).to_list(length=None)
+    
+    # Group by worker
+    worker_stats = {}
+    for p in products:
+        wid = p.get("generated_by_user_id")
+        wname = p.get("generated_by_name", "Unknown")
+        
+        if wid not in worker_stats:
+            worker_stats[wid] = {
+                "worker_id": wid,
+                "worker_name": wname,
+                "products_generated": 0,
+                "products_approved": 0,
+                "products_rejected": 0,
+                "images_reviewed": 0,
+                "approval_rate": 0
+            }
+        
+        worker_stats[wid]["products_generated"] += 1
+        
+        status = p.get("export_status", "pending")
+        if status == "approved" or status == "exported":
+            worker_stats[wid]["products_approved"] += 1
+        elif status == "rejected":
+            worker_stats[wid]["products_rejected"] += 1
+        
+        # Count images reviewed (refined or variations created)
+        if p.get("image_workflow_status") in ["refined", "variation-created", "completed"]:
+            worker_stats[wid]["images_reviewed"] += 1
+    
+    # Calculate approval rates
+    for w in worker_stats.values():
+        total = w["products_approved"] + w["products_rejected"]
+        if total > 0:
+            w["approval_rate"] = round((w["products_approved"] / total) * 100, 1)
+    
+    return list(worker_stats.values())
+
+
 @api.delete("/admin/images/{image_id}")
 async def delete_image(image_id: str, user: dict = Depends(require_role("admin", "manager"))):
     asset = await db.image_assets.find_one({"id": image_id, "is_deleted": {"$ne": True}}, {"_id": 0})
