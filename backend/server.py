@@ -1613,6 +1613,23 @@ async def delete_image(image_id: str, user: dict = Depends(require_role("admin",
     return {"ok": True}
 
 
+@api.delete("/admin/images/clear-all")
+async def clear_all_images(user: dict = Depends(require_role("admin"))):
+    """Delete all image assets and variations from the database (admin only)."""
+    # Delete all image assets
+    assets_result = await db.image_assets.delete_many({})
+    # Delete all image variations
+    variations_result = await db.image_variations.delete_many({})
+    
+    await log_activity(user["id"], "all_images_cleared", {"assets_deleted": assets_result.deleted_count, "variations_deleted": variations_result.deleted_count}, "system", "global")
+    
+    return {
+        "ok": True,
+        "assets_deleted": assets_result.deleted_count,
+        "variations_deleted": variations_result.deleted_count
+    }
+
+
 @api.post("/admin/images/upload-bulk")
 async def upload_images_bulk(
     files: list[UploadFile] = File(...),
