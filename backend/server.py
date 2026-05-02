@@ -916,10 +916,18 @@ async def download_image(image_id: str, authorization: Optional[str] = Header(No
         var = await db.image_variations.find_one({"id": image_id}, {"_id": 0})
         if not var:
             raise HTTPException(404, "Not found")
-        data, ct = await asyncio.to_thread(storage.get_object, var["storage_path"])
-        return Response(content=data, media_type=var.get("content_type", ct))
-    data, ct = await asyncio.to_thread(storage.get_object, asset["storage_path"])
-    return Response(content=data, media_type=asset.get("content_type") or ct)
+        try:
+            data, ct = await asyncio.to_thread(storage.get_object, var["storage_path"])
+            return Response(content=data, media_type=var.get("content_type", ct))
+        except Exception as e:
+            logger.warning("Failed to download variation %s: %s", image_id, e)
+            raise HTTPException(404, "Image file not found in storage")
+    try:
+        data, ct = await asyncio.to_thread(storage.get_object, asset["storage_path"])
+        return Response(content=data, media_type=asset.get("content_type") or ct)
+    except Exception as e:
+        logger.warning("Failed to download image %s: %s", image_id, e)
+        raise HTTPException(404, "Image file not found in storage")
 
 
 @api.patch("/admin/images/{image_id}")
