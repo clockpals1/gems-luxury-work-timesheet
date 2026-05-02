@@ -38,6 +38,17 @@ export default function AdminImages() {
 
   const setStatus = async (id, status) => { await api.patch(`/admin/images/${id}`, { status }); load(); };
 
+  const handleDelete = async (id) => {
+    if (!confirm("Are you sure you want to delete this image?")) return;
+    try {
+      await api.delete(`/admin/images/${id}`);
+      toast.success("Image deleted");
+      load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to delete image");
+    }
+  };
+
   const handleClearAll = async () => {
     if (!confirm("Are you sure you want to delete ALL images from the database? This action cannot be undone.")) return;
     if (!confirm("This will delete ALL image assets and variations. Type 'DELETE' to confirm.")) return;
@@ -90,7 +101,10 @@ export default function AdminImages() {
                   {["available","assigned","skipped","needs_review","archived"].map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                 </SelectContent>
               </Select>
-              <Button size="sm" variant="outline" className="border-[#21362A] w-full text-xs" onClick={() => setOpenId(img.id)} data-testid={`open-btn-${img.id}`}><Layers className="w-3 h-3 mr-1"/>Variations</Button>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" className="border-[#21362A] flex-1 text-xs" onClick={() => setOpenId(img.id)} data-testid={`open-btn-${img.id}`}><Layers className="w-3 h-3 mr-1"/>Variations</Button>
+                <Button size="sm" variant="outline" className="border-[#E63946] text-[#E63946] hover:bg-[#E63946]/10 text-xs px-2" onClick={() => handleDelete(img.id)}><Trash2 className="w-3 h-3"/></Button>
+              </div>
             </CardContent>
           </Card>
         ))}

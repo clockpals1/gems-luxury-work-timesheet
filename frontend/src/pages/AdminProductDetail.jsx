@@ -17,6 +17,8 @@ export default function AdminProductDetail() {
   const [saving, setSaving] = useState(false);
   const [product, setProduct] = useState(null);
   const [images, setImages] = useState({});
+  const [allImages, setAllImages] = useState([]);
+  const [showImageSelector, setShowImageSelector] = useState(false);
   const [editing, setEditing] = useState(false);
   const [formData, setFormData] = useState({});
 
@@ -37,6 +39,21 @@ export default function AdminProductDetail() {
       setLoading(false);
     }
   };
+
+  const loadAllImages = async () => {
+    try {
+      const r = await api.get("/admin/images");
+      setAllImages(r.data);
+    } catch (e) {
+      toast.error("Failed to load images");
+    }
+  };
+
+  useEffect(() => {
+    if (showImageSelector) {
+      loadAllImages();
+    }
+  }, [showImageSelector]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -72,16 +89,26 @@ export default function AdminProductDetail() {
     }
   };
 
-  const handleSetBaseImage = (imageId) => {
-    setFormData({ ...formData, base_image_id: imageId, source_image_id: imageId });
+  const handleSetBaseImage = (id) => {
+    setFormData({ ...formData, base_image_id: id });
   };
 
-  const handleToggleAdditionalImage = (imageId) => {
+  const handleToggleAdditionalImage = (id) => {
     const current = formData.additional_image_ids || [];
-    const newAdditional = current.includes(imageId)
-      ? current.filter(id => id !== imageId)
-      : [...current, imageId];
-    setFormData({ ...formData, additional_image_ids: newAdditional });
+    if (current.includes(id)) {
+      setFormData({ ...formData, additional_image_ids: current.filter(i => i !== id) });
+    } else {
+      setFormData({ ...formData, additional_image_ids: [...current, id] });
+    }
+  };
+
+  const handleAddImageFromLibrary = (imageId) => {
+    // Add to images object
+    const img = allImages.find(i => i.id === imageId);
+    if (img) {
+      setImages({ ...images, [imageId]: img });
+    }
+    setShowImageSelector(false);
   };
 
   const getStatusColor = (status) => {
@@ -242,7 +269,14 @@ export default function AdminProductDetail() {
 
         {/* Image Mapping */}
         <Card className="bg-[#0C140F] border-[#21362A] rounded-sm">
-          <CardHeader><CardTitle className="font-display text-xl">Image Mapping</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle className="font-display text-xl">Image Mapping</CardTitle>
+            {editing && (
+              <Button onClick={() => setShowImageSelector(true)} variant="outline" className="border-[#D4AF37] text-[#D4AF37] hover:bg-[#D4AF37]/10 mt-2">
+                Add Image from Library
+              </Button>
+            )}
+          </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label className="label-overline">Base Image</Label>
@@ -310,6 +344,36 @@ export default function AdminProductDetail() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Image Selector Modal */}
+      {showImageSelector && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#0C140F] border-[#21362A] rounded-sm max-w-4xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+            <div className="p-4 border-b border-[#21362A] flex items-center justify-between">
+              <h3 className="font-display text-xl">Select Image from Library</h3>
+              <Button onClick={() => setShowImageSelector(false)} variant="ghost" className="text-[#A1B4A8]">
+                <X className="w-4 h-4"/>
+              </Button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {allImages.map((img) => (
+                  <div
+                    key={img.id}
+                    onClick={() => handleAddImageFromLibrary(img.id)}
+                    className="relative cursor-pointer border-2 border-[#21362A] rounded-lg overflow-hidden hover:border-[#D4AF37]"
+                  >
+                    <img src={imgUrl(img.id)} alt={img.filename} className="w-full aspect-square object-cover"/>
+                    <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-xs p-2 truncate">
+                      {img.filename}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </AdminLayout>
   );
 }
