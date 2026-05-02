@@ -46,6 +46,7 @@ KNOWN_COLLECTIONS: list[str] = [
     "image_assignments",
     "export_logs",
     "prompt_templates",
+    "product_groups",
 ]
 
 
