@@ -89,6 +89,8 @@ export default function AdminImages() {
       setGroupCategory("");
       setGroupTags("");
       load();
+      // Navigate to Product Groups page to view the created group
+      window.location.href = "/admin/product-groups";
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Failed to create product group");
     } finally {
