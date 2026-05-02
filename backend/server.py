@@ -1295,6 +1295,31 @@ async def reject_products_batch(body: dict, user: dict = Depends(require_role("a
     return {"ok": True, "count": len(product_ids)}
 
 
+@api.patch("/products/{product_id}/images")
+async def update_product_images(product_id: str, body: dict, user: dict = Depends(require_role("admin", "manager"))):
+    """Update image mapping for a product (base image and additional images)."""
+    product = await db.generated_products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Product not found")
+    
+    updates = {}
+    if "base_image_id" in body:
+        updates["base_image_id"] = body["base_image_id"]
+        updates["source_image_id"] = body["base_image_id"]
+    if "additional_image_ids" in body:
+        updates["additional_image_ids"] = body["additional_image_ids"]
+    
+    if updates:
+        updates["updated_at"] = iso(now_utc())
+        await db.generated_products.update_one(
+            {"id": product_id},
+            {"$set": updates}
+        )
+    
+    await log_activity(user["id"], "product_images_updated", {"product_id": product_id}, "generated_products", product_id)
+    return {"ok": True}
+
+
 @api.delete("/admin/images/{image_id}")
 async def delete_image(image_id: str, user: dict = Depends(require_role("admin", "manager"))):
     asset = await db.image_assets.find_one({"id": image_id, "is_deleted": {"$ne": True}}, {"_id": 0})
