@@ -2012,19 +2012,31 @@ async def list_product_groups(
 @api.get("/admin/product-groups/{group_id}")
 async def get_product_group(group_id: str, user: dict = Depends(require_role("admin", "manager"))):
     """Get product group details with all images."""
-    group = await db.product_groups.find_one({"id": group_id}, {"_id": 0})
-    if not group:
-        raise HTTPException(404, "Product group not found")
-    
-    # Get images in the group
-    image_ids = group.get("image_ids", [])
-    images = []
-    if image_ids:
-        images = await db.image_assets.find({"id": {"$in": image_ids}}, {"_id": 0}).to_list(length=None)
-        # Sort by sequence number
-        images.sort(key=lambda x: x.get("sequence_number", 0))
-    
-    return {"product_group": group, "images": images}
+    try:
+        logger.info("Getting product group details for ID: %s", group_id)
+        group = await db.product_groups.find_one({"id": group_id}, {"_id": 0})
+        if not group:
+            logger.warning("Product group not found: %s", group_id)
+            raise HTTPException(404, "Product group not found")
+        
+        logger.info("Found product group: %s", group.get("folder_name"))
+        
+        # Get images in the group
+        image_ids = group.get("image_ids", [])
+        images = []
+        if image_ids:
+            logger.info("Fetching %d images for product group", len(image_ids))
+            images = await db.image_assets.find({"id": {"$in": image_ids}}, {"_id": 0}).to_list(length=None)
+            # Sort by sequence number
+            images.sort(key=lambda x: x.get("sequence_number", 0))
+            logger.info("Found %d images", len(images))
+        
+        return {"product_group": group, "images": images}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error getting product group details: %s", e)
+        raise HTTPException(500, f"Failed to get product group: {str(e)}")
 
 
 @api.patch("/admin/product-groups/{group_id}/review")
