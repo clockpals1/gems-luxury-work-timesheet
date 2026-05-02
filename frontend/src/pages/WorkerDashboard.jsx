@@ -21,23 +21,18 @@ export default function WorkerDashboard() {
   const [category, setCategory] = useState("");
   const [generating, setGenerating] = useState(false);
   const [latest, setLatest] = useState(null);
-  const [images, setImages] = useState([]);
-  const [selectedImage, setSelectedImage] = useState(null);
 
   const load = useCallback(async () => {
-    const [s, p, c, i] = await Promise.all([
+    const [s, p, c] = await Promise.all([
       api.get("/attendance/me"),
       api.get("/products?mine=true&limit=20"),
       api.get("/admin/categories").catch(() => ({ data: [] })),
-      api.get("/admin/images?status=available").catch(() => ({ data: [] })),
     ]);
     setStatus(s.data);
     setProducts(p.data);
     setCategories(c.data || []);
-    setImages(i.data || []);
     if (c.data?.length && !category) setCategory(c.data[0].name);
-    if (i.data?.length && !selectedImage) setSelectedImage(i.data[0]);
-  }, [category, selectedImage]);
+  }, [category]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -56,10 +51,7 @@ export default function WorkerDashboard() {
     if (!status?.attendance) { toast.error("Punch in first."); return; }
     setGenerating(true); setLatest(null);
     try {
-      const r = await api.post("/products/generate", { 
-        category: category || undefined,
-        image_asset_id: selectedImage?.id
-      });
+      const r = await api.post("/products/generate", { category: category || undefined });
       setLatest(r.data);
       toast.success(`Generated: ${r.data.name}`);
       load();
@@ -114,27 +106,13 @@ export default function WorkerDashboard() {
           <Card className="lg:col-span-2 bg-[#0C140F] border-[#21362A] rounded-sm">
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="font-display text-2xl">Generate product</CardTitle>
-              <div className="flex gap-3">
-                <div className="w-48">
-                  <Select value={category} onValueChange={setCategory}>
-                    <SelectTrigger className="bg-[#132018] border-[#21362A]" data-testid="category-select"><SelectValue placeholder="Category"/></SelectTrigger>
-                    <SelectContent className="bg-[#0C140F] border-[#21362A] text-white">
-                      {categories.map((c) => <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="w-56">
-                  <Select value={selectedImage?.id || ""} onValueChange={(val) => setSelectedImage(images.find(i => i.id === val) || null)}>
-                    <SelectTrigger className="bg-[#132018] border-[#21362A]"><SelectValue placeholder="Select image"/></SelectTrigger>
-                    <SelectContent className="bg-[#0C140F] border-[#21362A] text-white max-h-60">
-                      {images.map((i) => (
-                        <SelectItem key={i.id} value={i.id}>
-                          {i.description || i.id}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+              <div className="w-56">
+                <Select value={category} onValueChange={setCategory}>
+                  <SelectTrigger className="bg-[#132018] border-[#21362A]" data-testid="category-select"><SelectValue placeholder="Category"/></SelectTrigger>
+                  <SelectContent className="bg-[#0C140F] border-[#21362A] text-white">
+                    {categories.map((c) => <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
             </CardHeader>
             <CardContent>
@@ -142,10 +120,8 @@ export default function WorkerDashboard() {
                 <div className="md:w-56 aspect-square bg-[#132018] border border-[#21362A] rounded-sm flex items-center justify-center overflow-hidden">
                   {latest?.image_asset_id ? (
                     <img src={imgUrl(latest.image_asset_id)} alt="assigned" className="w-full h-full object-cover"/>
-                  ) : selectedImage ? (
-                    <img src={imgUrl(selectedImage.id)} alt="selected" className="w-full h-full object-cover"/>
                   ) : (
-                    <div className="text-center text-[#A1B4A8] text-sm p-6">Select an image and click generate to get an AI product draft.</div>
+                    <div className="text-center text-[#A1B4A8] text-sm p-6">Click generate to get an AI product draft with an auto-assigned image.</div>
                   )}
                 </div>
                 <div className="flex-1 space-y-4">

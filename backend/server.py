@@ -887,6 +887,20 @@ async def patch_image(image_id: str, body: dict, user: dict = Depends(require_ro
     return {"ok": True}
 
 
+@api.post("/admin/images/{image_id}/reset")
+async def reset_image(image_id: str, user: dict = Depends(require_role("admin"))):
+    """Reset an assigned image back to available status."""
+    asset = await db.image_assets.find_one({"id": image_id, "is_deleted": {"$ne": True}}, {"_id": 0})
+    if not asset:
+        raise HTTPException(404, "Not found")
+    await db.image_assets.update_one(
+        {"id": image_id},
+        {"$set": {"status": "available", "updated_at": iso(now_utc())}}
+    )
+    await log_activity(user["id"], "image_reset", {"image_id": image_id}, "image_assets", image_id)
+    return {"ok": True}
+
+
 @api.delete("/admin/images/{image_id}")
 async def delete_image(image_id: str, user: dict = Depends(require_role("admin", "manager"))):
     asset = await db.image_assets.find_one({"id": image_id, "is_deleted": {"$ne": True}}, {"_id": 0})
