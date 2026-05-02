@@ -75,6 +75,11 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
+def get_base_url() -> str:
+    """Get the base URL for the API, from environment or request."""
+    return os.environ.get("API_BASE_URL", "https://gems-luxury-backend.onrender.com/api").rstrip("/api")
+
+
 def parse_utc_datetime(s: str) -> datetime:
     """Parse ISO datetime string to timezone-aware UTC datetime."""
     dt = datetime.fromisoformat(s)
@@ -572,10 +577,29 @@ async def generate_product(body: GenerateProductIn, user: dict = Depends(get_cur
         "sizes": draft.get("sizes", sizes),
         "final_price": draft["finalPrice"],
         "currency": pricing.get("currency", "USD"),
+        # CSV export fields
+        "active": True,
+        "is_active": True,
+        "brand": pricing.get("brand", "Gems & Luxury"),
+        "meta_title": draft["shortTitle"],
+        "meta_description": draft["shortDescription"],
+        "meta_keywords": draft.get("tags", []).join(", "),
+        # Image structure for CSV export
+        "base_image_id": (image_asset or {}).get("id"),  # Main image for CSV
+        "additional_image_ids": [],  # Refined + variations for CSV
+        # Internal tracking fields
+        "source_image_id": (image_asset or {}).get("id"),
+        "refined_image_id": None,
+        "variation_image_1_id": None,
+        "variation_image_2_id": None,
+        "export_status": "pending",  # pending, approved, exported
+        "reviewed_by_admin": False,
+        "session_id": status?.session_id if status else None,
+        "punch_status_at_generation": status?.status if status else None,
+        # Legacy fields
         "image_asset_id": (image_asset or {}).get("id"),
         "image_variation_ids": [],
         "image_workflow_status": "assigned",  # assigned, refined, variation-created, skipped, completed
-        "refined_image_id": None,
         "variation_image_ids": [],  # 2 AI-generated views
         "pricing_meta": draft.get("pricingMeta", {}),
         "status": "draft",
@@ -979,6 +1003,8 @@ async def refine_product_image(product_id: str, user: dict = Depends(get_current
         {"id": product_id},
         {"$set": {
             "refined_image_id": refined_id,
+            "variation_image_1_id": refined_id,  # Also track as first variation for CSV export
+            "additional_image_ids": [refined_id],  # Add to additional images for CSV
             "image_workflow_status": "refined",
             "updated_at": iso(now_utc())
         }}
@@ -1039,10 +1065,19 @@ async def generate_product_views(product_id: str, user: dict = Depends(get_curre
         views.append(view_id)
     
     # Update product
+    # Build additional_image_ids: include refined image + variations
+    additional_images = []
+    if product.get("refined_image_id"):
+        additional_images.append(product["refined_image_id"])
+    additional_images.extend(views)
+    
     await db.generated_products.update_one(
         {"id": product_id},
         {"$set": {
             "variation_image_ids": views,
+            "variation_image_1_id": views[0] if len(views) > 0 else None,
+            "variation_image_2_id": views[1] if len(views) > 1 else None,
+            "additional_image_ids": additional_images,
             "image_workflow_status": "variation-created",
             "updated_at": iso(now_utc())
         }}
@@ -1072,6 +1107,140 @@ async def complete_product(product_id: str, user: dict = Depends(get_current_use
     
     await log_activity(user["id"], "product_completed", {"product_id": product_id}, "generated_products", product_id)
     return {"ok": True}
+
+
+@api.get("/products/export/csv")
+async def export_products_csv(user: dict = Depends(get_current_user)):
+    """Export products as CSV in Gems & Luxury import format."""
+    # Get products to export - filter by export_status and user role
+    if user["role"] == "admin":
+        # Admin can export all approved products
+        products = await db.generated_products.find(
+            {"export_status": "approved"},
+            {"_id": 0}
+        ).to_list(length=None)
+    else:
+        # Workers can only export their own approved products
+        products = await db.generated_products.find(
+            {"export_status": "approved", "generated_by_user_id": user["id"]},
+            {"_id": 0}
+        ).to_list(length=None)
+    
+    if not products:
+        raise HTTPException(404, "No approved products to export")
+    
+    # Build CSV headers
+    headers = [
+        "Name",
+        "description",
+        "short_description",
+        "Active",
+        "is_active",
+        "Brand",
+        "categories",
+        "Tags",
+        "Price",
+        "Base Image",
+        "Additional Images",
+        "meta_title",
+        "meta_description",
+        "meta_keywords"
+    ]
+    
+    # Build CSV rows
+    import csv
+    import io
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    
+    for p in products:
+        # Get image URLs
+        base_image_url = ""
+        if p.get("base_image_id"):
+            base_image_url = f"{get_base_url()}/images/{p['base_image_id']}"
+        
+        additional_image_urls = []
+        for img_id in p.get("additional_image_ids", []):
+            additional_image_urls.append(f"{get_base_url()}/images/{img_id}")
+        additional_images = ",".join(additional_image_urls)
+        
+        row = [
+            p.get("name", ""),
+            p.get("full_description", ""),
+            p.get("short_description", ""),
+            "yes" if p.get("active", True) else "no",
+            "yes" if p.get("is_active", True) else "no",
+            p.get("brand", "Gems & Luxury"),
+            p.get("category", ""),
+            ",".join(p.get("tags", [])),
+            p.get("final_price", ""),
+            base_image_url,
+            additional_images,
+            p.get("meta_title", ""),
+            p.get("meta_description", ""),
+            p.get("meta_keywords", "")
+        ]
+        writer.writerow(row)
+    
+    # Mark products as exported
+    product_ids = [p["id"] for p in products]
+    await db.generated_products.update_many(
+        {"id": {"$in": product_ids}},
+        {"$set": {"export_status": "exported", "exported_at": iso(now_utc())}}
+    )
+    
+    await log_activity(user["id"], "products_exported_csv", {"count": len(products)}, "generated_products")
+    
+    csv_content = output.getvalue()
+    output.close()
+    
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=products_export.csv"}
+    )
+
+
+@api.post("/products/{product_id}/approve")
+async def approve_product(product_id: str, user: dict = Depends(require_role("admin"))):
+    """Admin approves a product for export."""
+    product = await db.generated_products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Product not found")
+    
+    await db.generated_products.update_one(
+        {"id": product_id},
+        {"$set": {
+            "export_status": "approved",
+            "reviewed_by_admin": True,
+            "updated_at": iso(now_utc())
+        }}
+    )
+    
+    await log_activity(user["id"], "product_approved", {"product_id": product_id}, "generated_products", product_id)
+    return {"ok": True}
+
+
+@api.post("/products/approve-batch")
+async def approve_products_batch(body: dict, user: dict = Depends(require_role("admin"))):
+    """Admin approves multiple products for export."""
+    product_ids = body.get("product_ids", [])
+    if not product_ids:
+        raise HTTPException(400, "No product IDs provided")
+    
+    await db.generated_products.update_many(
+        {"id": {"$in": product_ids}},
+        {"$set": {
+            "export_status": "approved",
+            "reviewed_by_admin": True,
+            "updated_at": iso(now_utc())
+        }}
+    )
+    
+    await log_activity(user["id"], "products_approved_batch", {"count": len(product_ids)}, "generated_products")
+    return {"ok": True, "count": len(product_ids)}
 
 
 @api.delete("/admin/images/{image_id}")
