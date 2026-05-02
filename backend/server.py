@@ -1798,115 +1798,121 @@ async def upload_product_group(
     user: dict = Depends(require_role("admin", "manager"))
 ):
     """Upload a folder of images as a product group. One folder = one product."""
-    if not files:
-        raise HTTPException(400, "No files provided")
-    
-    # Get CSV settings for naming convention
-    settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0}) or {}
-    csv_settings = settings.get("csv", {}) or {}
-    naming_convention = csv_settings.get("naming_convention", "{group_name}-{seq:02d}")
-    
-    # Validate image count
-    if len(files) < 2:
-        raise HTTPException(400, "Folder must contain at least 2 images")
-    if len(files) > 10:
-        raise HTTPException(400, "Folder contains too many images (max 10)")
-    
-    # Check for unsupported files
-    supported_types = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
-    unsupported = [f.filename for f in files if f.content_type not in supported_types]
-    if unsupported:
-        raise HTTPException(400, f"Unsupported file types: {', '.join(unsupported)}")
-    
-    # Create product group
-    group_id = new_id()
-    group_doc = {
-        "id": group_id,
-        "folder_name": folder_name,
-        "category": category,
-        "tags": [t.strip() for t in tags.split(",") if t.strip()] if tags else [],
-        "image_count": len(files),
-        "uploaded_by": user["id"],
-        "uploaded_by_name": user["name"],
-        "uploaded_at": iso(now_utc()),
-        "base_image_id": None,
-        "additional_image_ids": [],
-        "review_status": "pending",  # pending, reviewed, approved, needs_review
-        "flags": [],
-        "naming_convention": naming_convention
-    }
-    
-    # Flag for review if unusual
-    if len(files) < 2 or len(files) > 5:
-        group_doc["flags"].append("unusual_image_count")
-    
-    # Upload images with auto-renaming
-    image_assets = []
-    for idx, file in enumerate(files):
-        try:
-            data = await file.read()
-            if not data:
-                continue
-            
-            # Auto-rename using naming convention
-            seq = idx + 1
-            normalized_filename = naming_convention.format(
-                group_name=folder_name,
-                seq=seq,
-                date=datetime.now().strftime("%Y%m%d")
-            )
-            
-            # Add extension
-            ext = Path(file.filename).suffix or ".png"
-            normalized_filename += ext
-            
-            # Upload to storage
-            path = storage.build_path(user["id"], f"product-groups/{group_id}/{normalized_filename}")
-            result = await asyncio.to_thread(storage.put_object, path, data, file.content_type or "image/png")
-            
-            # Create image asset with metadata
-            image_doc = {
-                "id": new_id(),
-                "storage_path": result["path"],
-                "filename": normalized_filename,
-                "original_filename": file.filename,
-                "content_type": file.content_type,
-                "size": result.get("size", len(data)),
-                "category": category,
-                "tags": [t.strip() for t in tags.split(",") if t.strip()] if tags else [],
-                "status": "available",
-                "assigned_count": 0,
-                "is_deleted": False,
-                "uploaded_by": user["id"],
-                "uploaded_at": iso(now_utc()),
-                # Product group metadata
-                "product_group_id": group_id,
-                "sequence_number": seq,
-                "is_base_image": False,
-                "is_additional_image": True,
-                "review_status": "pending",
-                "approval_status": "pending"
-            }
-            
-            await db.image_assets.insert_one(image_doc)
-            image_doc.pop("_id", None)
-            image_assets.append(image_doc)
-            
-        except Exception as e:
-            logger.exception("Failed to upload image %s: %s", file.filename, e)
-            group_doc["flags"].append(f"upload_error_{file.filename}")
-    
-    # Update group with image IDs
-    group_doc["image_ids"] = [img["id"] for img in image_assets]
-    group_doc["image_count"] = len(image_assets)
-    
-    # Insert product group
-    await db.product_groups.insert_one(group_doc)
-    group_doc.pop("_id", None)
-    
-    await log_activity(user["id"], "product_group_uploaded", {"folder_name": folder_name, "image_count": len(image_assets)}, "product_group", group_id)
-    
-    return {"product_group": group_doc, "images": image_assets}
+    try:
+        if not files:
+            raise HTTPException(400, "No files provided")
+        
+        # Get CSV settings for naming convention
+        settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0}) or {}
+        csv_settings = settings.get("csv", {}) or {}
+        naming_convention = csv_settings.get("naming_convention", "{group_name}-{seq:02d}")
+        
+        # Validate image count
+        if len(files) < 2:
+            raise HTTPException(400, "Folder must contain at least 2 images")
+        if len(files) > 10:
+            raise HTTPException(400, "Folder contains too many images (max 10)")
+        
+        # Check for unsupported files
+        supported_types = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
+        unsupported = [f.filename for f in files if f.content_type not in supported_types]
+        if unsupported:
+            raise HTTPException(400, f"Unsupported file types: {', '.join(unsupported)}")
+        
+        # Create product group
+        group_id = new_id()
+        group_doc = {
+            "id": group_id,
+            "folder_name": folder_name,
+            "category": category,
+            "tags": [t.strip() for t in tags.split(",") if t.strip()] if tags else [],
+            "image_count": len(files),
+            "uploaded_by": user["id"],
+            "uploaded_by_name": user["name"],
+            "uploaded_at": iso(now_utc()),
+            "base_image_id": None,
+            "additional_image_ids": [],
+            "review_status": "pending",  # pending, reviewed, approved, needs_review
+            "flags": [],
+            "naming_convention": naming_convention
+        }
+        
+        # Flag for review if unusual
+        if len(files) < 2 or len(files) > 5:
+            group_doc["flags"].append("unusual_image_count")
+        
+        # Upload images with auto-renaming
+        image_assets = []
+        for idx, file in enumerate(files):
+            try:
+                data = await file.read()
+                if not data:
+                    continue
+                
+                # Auto-rename using naming convention
+                seq = idx + 1
+                normalized_filename = naming_convention.format(
+                    group_name=folder_name,
+                    seq=seq,
+                    date=datetime.now().strftime("%Y%m%d")
+                )
+                
+                # Add extension
+                ext = Path(file.filename).suffix or ".png"
+                normalized_filename += ext
+                
+                # Upload to storage
+                path = storage.build_path(user["id"], f"product-groups/{group_id}/{normalized_filename}")
+                result = await asyncio.to_thread(storage.put_object, path, data, file.content_type or "image/png")
+                
+                # Create image asset with metadata
+                image_doc = {
+                    "id": new_id(),
+                    "storage_path": result["path"],
+                    "filename": normalized_filename,
+                    "original_filename": file.filename,
+                    "content_type": file.content_type,
+                    "size": result.get("size", len(data)),
+                    "category": category,
+                    "tags": [t.strip() for t in tags.split(",") if t.strip()] if tags else [],
+                    "status": "available",
+                    "assigned_count": 0,
+                    "is_deleted": False,
+                    "uploaded_by": user["id"],
+                    "uploaded_at": iso(now_utc()),
+                    # Product group metadata
+                    "product_group_id": group_id,
+                    "sequence_number": seq,
+                    "is_base_image": False,
+                    "is_additional_image": True,
+                    "review_status": "pending",
+                    "approval_status": "pending"
+                }
+                
+                await db.image_assets.insert_one(image_doc)
+                image_doc.pop("_id", None)
+                image_assets.append(image_doc)
+                
+            except Exception as e:
+                logger.exception("Failed to upload image %s: %s", file.filename, e)
+                group_doc["flags"].append(f"upload_error_{file.filename}")
+        
+        # Update group with image IDs
+        group_doc["image_ids"] = [img["id"] for img in image_assets]
+        group_doc["image_count"] = len(image_assets)
+        
+        # Insert product group
+        await db.product_groups.insert_one(group_doc)
+        group_doc.pop("_id", None)
+        
+        await log_activity(user["id"], "product_group_uploaded", {"folder_name": folder_name, "image_count": len(image_assets)}, "product_group", group_id)
+        
+        return {"product_group": group_doc, "images": image_assets}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error uploading product group folder: %s", e)
+        raise HTTPException(500, f"Failed to upload product group: {str(e)}")
 
 
 @api.get("/admin/product-groups")
@@ -1916,11 +1922,16 @@ async def list_product_groups(
     limit: int = Query(50, ge=1, le=200)
 ):
     """List product groups with optional filtering."""
-    query = {}
-    if review_status:
-        query["review_status"] = review_status
-    
     try:
+        # Check if collection exists
+        collections = await db.list_collection_names()
+        if "product_groups" not in collections:
+            return []
+        
+        query = {}
+        if review_status:
+            query["review_status"] = review_status
+        
         groups = await db.product_groups.find(query, {"_id": 0}).sort("uploaded_at", -1).to_list(limit)
         return groups
     except Exception as e:
