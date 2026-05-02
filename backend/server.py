@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, Header, Query, Response
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -47,6 +48,20 @@ JWT_ALG = "HS256"
 JWT_EXPIRES_MINUTES = int(os.environ.get("JWT_EXPIRES_MINUTES", "720"))
 
 app = FastAPI(title="Gems & Luxury Internal")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://app.gemsandluxury.com",
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:8080",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(Exception)
