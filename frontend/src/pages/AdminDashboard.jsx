@@ -5,7 +5,7 @@ import { AdminLayout } from "../components/Layout";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { Users, Coffee, Timer, Package, Image as ImageIcon, Download, ChevronRight } from "lucide-react";
+import { Users, Coffee, Timer, Package, Image as ImageIcon, Download, ChevronRight, FolderOpen } from "lucide-react";
 
 const stateStyle = {
   active: "bg-[#097969]/20 text-[#2A9D8F] border-[#097969]/40",
@@ -62,7 +62,7 @@ export default function AdminDashboard() {
         <section>
           <Card className="bg-[#0C140F] border-[#21362A] rounded-sm">
             <CardHeader><CardTitle className="font-display text-2xl">Quick Actions</CardTitle></CardHeader>
-            <CardContent className="grid md:grid-cols-3 gap-4">
+            <CardContent className="grid md:grid-cols-4 gap-4">
               <Button onClick={() => navigate("/admin/csv-queue")} className="bg-[#D4AF37] hover:bg-[#F0C84A] text-[#050A07] h-auto py-4">
                 <div className="flex items-center justify-between">
                   <div className="text-left">
@@ -70,6 +70,15 @@ export default function AdminDashboard() {
                     <div className="text-xs opacity-80">Review and export products</div>
                   </div>
                   <ChevronRight className="w-5 h-5"/>
+                </div>
+              </Button>
+              <Button onClick={() => navigate("/admin/product-groups")} variant="outline" className="border-[#097969] text-[#2A9D8F] h-auto py-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-left">
+                    <div className="font-semibold">Product Groups</div>
+                    <div className="text-xs opacity-80">Upload folders for review</div>
+                  </div>
+                  <FolderOpen className="w-5 h-5"/>
                 </div>
               </Button>
               <Button onClick={() => navigate("/admin/settings")} variant="outline" className="border-[#21362A] text-[#A1B4A8] h-auto py-4">
