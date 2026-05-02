@@ -574,6 +574,9 @@ async def generate_product(body: GenerateProductIn, user: dict = Depends(get_cur
         "currency": pricing.get("currency", "USD"),
         "image_asset_id": (image_asset or {}).get("id"),
         "image_variation_ids": [],
+        "image_workflow_status": "assigned",  # assigned, refined, variation-created, skipped, completed
+        "refined_image_id": None,
+        "variation_image_ids": [],  # 2 AI-generated views
         "pricing_meta": draft.get("pricingMeta", {}),
         "status": "draft",
         "generated_by_user_id": user["id"],
@@ -898,6 +901,174 @@ async def reset_image(image_id: str, user: dict = Depends(require_role("admin"))
         {"$set": {"status": "available", "updated_at": iso(now_utc())}}
     )
     await log_activity(user["id"], "image_reset", {"image_id": image_id}, "image_assets", image_id)
+    return {"ok": True}
+
+
+@api.post("/products/{product_id}/skip-image")
+async def skip_product_image(product_id: str, user: dict = Depends(get_current_user)):
+    """Skip the assigned image for a product and mark workflow status."""
+    product = await db.generated_products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Product not found")
+    if product.get("generated_by_user_id") != user["id"] and user["role"] != "admin":
+        raise HTTPException(403, "Not authorized")
+    # Reset image status to available
+    if product.get("image_asset_id"):
+        await db.image_assets.update_one(
+            {"id": product["image_asset_id"]},
+            {"$set": {"status": "available", "updated_at": iso(now_utc())}}
+        )
+    # Update product workflow status
+    await db.generated_products.update_one(
+        {"id": product_id},
+        {"$set": {"image_workflow_status": "skipped", "image_asset_id": None, "updated_at": iso(now_utc())}}
+    )
+    await log_activity(user["id"], "product_image_skipped", {"product_id": product_id}, "generated_products", product_id)
+    return {"ok": True}
+
+
+@api.post("/products/{product_id}/refine-image")
+async def refine_product_image(product_id: str, user: dict = Depends(get_current_user)):
+    """Refine the assigned image for a product using AI enhancement."""
+    product = await db.generated_products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Product not found")
+    if product.get("generated_by_user_id") != user["id"] and user["role"] != "admin":
+        raise HTTPException(403, "Not authorized")
+    if not product.get("image_asset_id"):
+        raise HTTPException(400, "No image assigned to this product")
+    
+    # Get original image bytes
+    asset = await db.image_assets.find_one({"id": product["image_asset_id"]}, {"_id": 0})
+    if not asset:
+        raise HTTPException(404, "Image asset not found")
+    
+    try:
+        original_bytes = await asyncio.to_thread(storage.get_object, asset["storage_path"])
+    except Exception as e:
+        logger.exception("Failed to get original image: %s", e)
+        raise HTTPException(500, "Failed to retrieve original image")
+    
+    # Enhance image
+    enhanced_bytes = await ai_service.enhance_image(db, original_bytes)
+    if not enhanced_bytes:
+        raise HTTPException(500, "Image enhancement failed")
+    
+    # Store refined image
+    storage_path = f"products/{product_id}/refined.png"
+    await asyncio.to_thread(storage.put_object, storage_path, enhanced_bytes, "image/png")
+    
+    # Create image asset record
+    refined_id = new_id()
+    await db.image_assets.insert_one({
+        "id": refined_id,
+        "storage_path": storage_path,
+        "filename": f"{product_id}_refined.png",
+        "status": "assigned",
+        "tags": asset.get("tags", []),
+        "category": asset.get("category"),
+        "description": f"Refined version of {asset.get('description', 'image')}",
+        "assigned_count": 0,
+        "created_at": iso(now_utc()),
+        "updated_at": iso(now_utc()),
+    })
+    
+    # Update product
+    await db.generated_products.update_one(
+        {"id": product_id},
+        {"$set": {
+            "refined_image_id": refined_id,
+            "image_workflow_status": "refined",
+            "updated_at": iso(now_utc())
+        }}
+    )
+    
+    await log_activity(user["id"], "product_image_refined", {"product_id": product_id, "refined_image_id": refined_id}, "generated_products", product_id)
+    return {"ok": True, "refined_image_id": refined_id}
+
+
+@api.post("/products/{product_id}/generate-views")
+async def generate_product_views(product_id: str, user: dict = Depends(get_current_user)):
+    """Generate 2 AI-derived views from the original image for a product."""
+    product = await db.generated_products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Product not found")
+    if product.get("generated_by_user_id") != user["id"] and user["role"] != "admin":
+        raise HTTPException(403, "Not authorized")
+    
+    # Use original or refined image
+    source_image_id = product.get("refined_image_id") or product.get("image_asset_id")
+    if not source_image_id:
+        raise HTTPException(400, "No image available for view generation")
+    
+    asset = await db.image_assets.find_one({"id": source_image_id}, {"_id": 0})
+    if not asset:
+        raise HTTPException(404, "Image asset not found")
+    
+    try:
+        original_bytes = await asyncio.to_thread(storage.get_object, asset["storage_path"])
+    except Exception as e:
+        logger.exception("Failed to get source image: %s", e)
+        raise HTTPException(500, "Failed to retrieve source image")
+    
+    # Generate 2 alternate views
+    views = []
+    for i, view in enumerate(["front", "side"], 1):
+        view_bytes = await ai_service.generate_alternate_view(db, original_bytes, view)
+        if not view_bytes:
+            raise HTTPException(500, f"Failed to generate view {i}")
+        
+        storage_path = f"products/{product_id}/view_{i}_{view}.png"
+        await asyncio.to_thread(storage.put_object, storage_path, view_bytes, "image/png")
+        
+        view_id = new_id()
+        await db.image_assets.insert_one({
+            "id": view_id,
+            "storage_path": storage_path,
+            "filename": f"{product_id}_view_{i}_{view}.png",
+            "status": "assigned",
+            "tags": asset.get("tags", []),
+            "category": asset.get("category"),
+            "description": f"AI-generated {view} view of {asset.get('description', 'product')}",
+            "assigned_count": 0,
+            "created_at": iso(now_utc()),
+            "updated_at": iso(now_utc()),
+        })
+        views.append(view_id)
+    
+    # Update product
+    await db.generated_products.update_one(
+        {"id": product_id},
+        {"$set": {
+            "variation_image_ids": views,
+            "image_workflow_status": "variation-created",
+            "updated_at": iso(now_utc())
+        }}
+    )
+    
+    await log_activity(user["id"], "product_views_generated", {"product_id": product_id, "view_ids": views}, "generated_products", product_id)
+    return {"ok": True, "variation_image_ids": views}
+
+
+@api.post("/products/{product_id}/complete")
+async def complete_product(product_id: str, user: dict = Depends(get_current_user)):
+    """Mark a product as completed in the workflow."""
+    product = await db.generated_products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Product not found")
+    if product.get("generated_by_user_id") != user["id"] and user["role"] != "admin":
+        raise HTTPException(403, "Not authorized")
+    
+    await db.generated_products.update_one(
+        {"id": product_id},
+        {"$set": {
+            "image_workflow_status": "completed",
+            "status": "completed",
+            "updated_at": iso(now_utc())
+        }}
+    )
+    
+    await log_activity(user["id"], "product_completed", {"product_id": product_id}, "generated_products", product_id)
     return {"ok": True}
 
 

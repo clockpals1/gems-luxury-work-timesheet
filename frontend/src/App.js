@@ -6,6 +6,7 @@ import { Toaster } from "./components/ui/sonner";
 
 import Login from "./pages/Login";
 import WorkerDashboard from "./pages/WorkerDashboard";
+import ProductDetail from "./pages/ProductDetail";
 import AdminDashboard from "./pages/AdminDashboard";
 import AdminUsers from "./pages/AdminUsers";
 import AdminProducts from "./pages/AdminProducts";
@@ -31,6 +32,7 @@ function Router() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/worker" element={<Protected roles={["worker","manager","admin"]}><WorkerDashboard /></Protected>} />
+      <Route path="/products/:productId" element={<Protected roles={["worker","manager","admin"]}><ProductDetail /></Protected>} />
       <Route path="/admin" element={<Protected roles={["admin","manager"]}><AdminDashboard /></Protected>} />
       <Route path="/admin/users" element={<Protected roles={["admin","manager"]}><AdminUsers /></Protected>} />
       <Route path="/admin/products" element={<Protected roles={["admin","manager"]}><AdminProducts /></Protected>} />

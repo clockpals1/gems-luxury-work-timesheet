@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { api, imgUrl } from "../lib/api";
 import { WorkerLayout } from "../components/Layout";
 import { Button } from "../components/ui/button";
@@ -7,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
-import { Play, Pause, LogOut as PunchOut, Sparkles, Coffee, Timer, Package } from "lucide-react";
+import { Play, Pause, LogOut as PunchOut, Sparkles, Coffee, Timer, Package, Download, X } from "lucide-react";
 
 const fmtMin = (m = 0) => {
   const h = Math.floor(m / 60), mm = m % 60;
@@ -15,12 +16,14 @@ const fmtMin = (m = 0) => {
 };
 
 export default function WorkerDashboard() {
+  const navigate = useNavigate();
   const [status, setStatus] = useState(null);
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [category, setCategory] = useState("");
   const [generating, setGenerating] = useState(false);
   const [latest, setLatest] = useState(null);
+  const [processing, setProcessing] = useState({});
 
   const load = useCallback(async () => {
     const [s, p, c] = await Promise.all([
@@ -58,6 +61,78 @@ export default function WorkerDashboard() {
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Generation failed");
     } finally { setGenerating(false); }
+  };
+
+  const handleDownload = async (imageId) => {
+    try {
+      const r = await api.get(`/images/${imageId}/download`, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `product_${latest?.id}_image.png`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (e) {
+      toast.error("Download failed");
+    }
+  };
+
+  const handleRefine = async () => {
+    if (!latest?.id) return;
+    setProcessing((p) => ({ ...p, refine: true }));
+    try {
+      await api.post(`/products/${latest.id}/refine-image`);
+      toast.success("Image refined successfully");
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Refine failed");
+    } finally {
+      setProcessing((p) => ({ ...p, refine: false }));
+    }
+  };
+
+  const handleGenerateViews = async () => {
+    if (!latest?.id) return;
+    setProcessing((p) => ({ ...p, views: true }));
+    try {
+      await api.post(`/products/${latest.id}/generate-views`);
+      toast.success("AI views generated successfully");
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "View generation failed");
+    } finally {
+      setProcessing((p) => ({ ...p, views: false }));
+    }
+  };
+
+  const handleSkip = async () => {
+    if (!latest?.id) return;
+    if (!confirm("Skip this image? It will be returned to the available pool.")) return;
+    setProcessing((p) => ({ ...p, skip: true }));
+    try {
+      await api.post(`/products/${latest.id}/skip-image`);
+      toast.success("Image skipped");
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Skip failed");
+    } finally {
+      setProcessing((p) => ({ ...p, skip: false }));
+    }
+  };
+
+  const handleComplete = async () => {
+    if (!latest?.id) return;
+    setProcessing((p) => ({ ...p, complete: true }));
+    try {
+      await api.post(`/products/${latest.id}/complete`);
+      toast.success("Product completed");
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Complete failed");
+    } finally {
+      setProcessing((p) => ({ ...p, complete: false }));
+    }
   };
 
   const onBreak = !!status?.open_break;
@@ -130,24 +205,50 @@ export default function WorkerDashboard() {
                     <Sparkles className="w-4 h-4 mr-2"/>{generating ? "Crafting draft…" : "Generate product"}
                   </Button>
                   {latest && (
-                    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-3 p-4 border border-[#21362A] rounded-sm bg-[#050A07]" data-testid="latest-product">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="label-overline">Product name</div>
-                          <div className="font-display text-2xl mt-1">{latest.name}</div>
+                    <>
+                      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-3 p-4 border border-[#21362A] rounded-sm bg-[#050A07]" data-testid="latest-product">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="label-overline">Product name</div>
+                            <div className="font-display text-2xl mt-1">{latest.name}</div>
+                          </div>
+                          <div className="text-right">
+                            <div className="label-overline">Price</div>
+                            <div className="font-display text-3xl text-[#D4AF37]">${latest.final_price}</div>
+                          </div>
                         </div>
-                        <div className="text-right">
-                          <div className="label-overline">Price</div>
-                          <div className="font-display text-3xl text-[#D4AF37]">${latest.final_price}</div>
+                        <div className="text-sm text-[#A1B4A8]">{latest.short_description}</div>
+                        <div className="text-xs text-[#A1B4A8] whitespace-pre-line">{latest.full_description}</div>
+                        <div className="flex gap-2 flex-wrap">
+                          {latest.tags?.map((t) => <Badge key={t} className="bg-[#132018] text-[#A1B4A8] border border-[#21362A]">{t}</Badge>)}
                         </div>
+                        <div className="flex gap-2 text-xs text-[#A1B4A8]">Sizes: {latest.sizes?.join(", ")}</div>
+                      </motion.div>
+                      
+                      {/* Workflow buttons */}
+                      <div className="grid grid-cols-2 gap-2">
+                        {latest.image_asset_id && (
+                          <Button onClick={() => handleDownload(latest.image_asset_id)} variant="outline" className="border-[#21362A] text-[#A1B4A8]">
+                            <Download className="w-4 h-4 mr-2"/>Download Image
+                          </Button>
+                        )}
+                        <Button onClick={() => navigate(`/products/${latest.id}`)} variant="outline" className="border-[#21362A] text-[#A1B4A8]">
+                          Review Image
+                        </Button>
+                        <Button onClick={handleRefine} disabled={processing.refine || latest.image_workflow_status !== "assigned"} className="bg-[#D4AF37] hover:bg-[#F0C84A] text-[#050A07]">
+                          <Sparkles className="w-4 h-4 mr-2"/>{processing.refine ? "Refining..." : "Refine Image"}
+                        </Button>
+                        <Button onClick={handleGenerateViews} disabled={processing.views || (latest.image_workflow_status !== "refined" && latest.image_workflow_status !== "assigned")} className="bg-[#D4AF37] hover:bg-[#F0C84A] text-[#050A07]">
+                          <Sparkles className="w-4 h-4 mr-2"/>{processing.views ? "Generating..." : "Create 2 AI Views"}
+                        </Button>
+                        <Button onClick={handleSkip} disabled={processing.skip || latest.image_workflow_status !== "assigned"} variant="outline" className="border-[#21362A] text-[#A1B4A8]">
+                          <X className="w-4 h-4 mr-2"/>{processing.skip ? "Skipping..." : "Skip Image"}
+                        </Button>
+                        <Button onClick={handleComplete} disabled={processing.complete || (latest.image_workflow_status !== "refined" && latest.image_workflow_status !== "variation-created")} className="bg-[#097969] hover:bg-[#0a8a78]">
+                          {processing.complete ? "Saving..." : "Save Product Record"}
+                        </Button>
                       </div>
-                      <div className="text-sm text-[#A1B4A8]">{latest.short_description}</div>
-                      <div className="text-xs text-[#A1B4A8] whitespace-pre-line">{latest.full_description}</div>
-                      <div className="flex gap-2 flex-wrap">
-                        {latest.tags?.map((t) => <Badge key={t} className="bg-[#132018] text-[#A1B4A8] border border-[#21362A]">{t}</Badge>)}
-                      </div>
-                      <div className="flex gap-2 text-xs text-[#A1B4A8]">Sizes: {latest.sizes?.join(", ")}</div>
-                    </motion.div>
+                    </>
                   )}
                 </div>
               </div>
@@ -158,7 +259,11 @@ export default function WorkerDashboard() {
             <CardContent className="space-y-3" data-testid="recent-products">
               {products.length === 0 && <div className="text-sm text-[#A1B4A8]">Nothing yet — generate your first product.</div>}
               {products.slice(0, 8).map((p) => (
-                <div key={p.id} className="flex items-center gap-3 p-2 rounded-sm border border-transparent hover:border-[#21362A]">
+                <div 
+                  key={p.id} 
+                  onClick={() => navigate(`/products/${p.id}`)}
+                  className="flex items-center gap-3 p-2 rounded-sm border border-transparent hover:border-[#21362A] cursor-pointer"
+                >
                   <Package className="w-4 h-4 text-[#D4AF37]"/>
                   <div className="flex-1 min-w-0">
                     <div className="truncate text-sm">{p.name}</div>
