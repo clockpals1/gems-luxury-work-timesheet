@@ -944,7 +944,8 @@ async def refine_product_image(product_id: str, user: dict = Depends(get_current
         raise HTTPException(404, "Image asset not found")
     
     try:
-        original_bytes = await asyncio.to_thread(storage.get_object, asset["storage_path"])
+        original_bytes_tuple = await asyncio.to_thread(storage.get_object, asset["storage_path"])
+        original_bytes = original_bytes_tuple[0]  # Extract bytes from (bytes, mime_type) tuple
     except Exception as e:
         logger.exception("Failed to get original image: %s", e)
         raise HTTPException(500, "Failed to retrieve original image")
@@ -1006,7 +1007,8 @@ async def generate_product_views(product_id: str, user: dict = Depends(get_curre
         raise HTTPException(404, "Image asset not found")
     
     try:
-        original_bytes = await asyncio.to_thread(storage.get_object, asset["storage_path"])
+        original_bytes_tuple = await asyncio.to_thread(storage.get_object, asset["storage_path"])
+        original_bytes = original_bytes_tuple[0]  # Extract bytes from (bytes, mime_type) tuple
     except Exception as e:
         logger.exception("Failed to get source image: %s", e)
         raise HTTPException(500, "Failed to retrieve source image")
