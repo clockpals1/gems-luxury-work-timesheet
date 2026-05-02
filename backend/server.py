@@ -1954,17 +1954,21 @@ async def list_product_groups(
     try:
         # Check if collection exists
         collections = await db.list_collection_names()
+        logger.info("Available collections: %s", collections)
         if "product_groups" not in collections:
+            logger.warning("product_groups collection not found in available collections")
             return []
         
         query = {}
         if review_status:
             query["review_status"] = review_status
         
+        logger.info("Querying product_groups with query: %s", query)
         groups = await db.product_groups.find(query, {"_id": 0}).sort("uploaded_at", -1).to_list(limit)
+        logger.info("Found %d product groups", len(groups))
         return groups
     except Exception as e:
-        logger.error("Error listing product groups: %s", e)
+        logger.exception("Error listing product groups: %s", e)
         return []
 
 
