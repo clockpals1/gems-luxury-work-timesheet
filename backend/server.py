@@ -1952,12 +1952,20 @@ async def list_product_groups(
 ):
     """List product groups with optional filtering."""
     try:
-        # Check if collection exists
-        collections = await db.list_collection_names()
-        logger.info("Available collections: %s", collections)
-        if "product_groups" not in collections:
-            logger.warning("product_groups collection not found in available collections")
-            # Try to create the table manually
+        # Check if table exists using direct SQL
+        table_exists = False
+        try:
+            async with _acquire_conn() as c:
+                result = await c.fetchval(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'gl_product_groups')"
+                )
+                table_exists = result
+                logger.info("gl_product_groups table exists: %s", table_exists)
+        except Exception as e:
+            logger.exception("Error checking if table exists: %s", e)
+        
+        if not table_exists:
+            logger.warning("gl_product_groups table does not exist, creating it")
             try:
                 tbl = f"gl_product_groups"
                 async with _acquire_conn() as c:
