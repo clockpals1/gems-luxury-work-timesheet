@@ -23,7 +23,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import storage
 import ai_service
-from db import db, init_pool, close_pool, check_db
+from db import db, init_pool, close_pool, check_db, _acquire_conn
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -1957,6 +1957,21 @@ async def list_product_groups(
         logger.info("Available collections: %s", collections)
         if "product_groups" not in collections:
             logger.warning("product_groups collection not found in available collections")
+            # Try to create the table manually
+            try:
+                tbl = f"gl_product_groups"
+                async with _acquire_conn() as c:
+                    await c.execute(
+                        f"""
+                        CREATE TABLE IF NOT EXISTS {tbl} (
+                            id   TEXT PRIMARY KEY,
+                            doc  JSONB NOT NULL
+                        );
+                        """
+                    )
+                logger.info("Created product_groups table manually")
+            except Exception as e:
+                logger.exception("Failed to create product_groups table: %s", e)
             return []
         
         query = {}
