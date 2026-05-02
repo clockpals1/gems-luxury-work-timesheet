@@ -1275,6 +1275,26 @@ async def approve_products_batch(body: dict, user: dict = Depends(require_role("
     return {"ok": True, "count": len(product_ids)}
 
 
+@api.post("/products/reject-batch")
+async def reject_products_batch(body: dict, user: dict = Depends(require_role("admin"))):
+    """Admin rejects multiple products from export."""
+    product_ids = body.get("product_ids", [])
+    if not product_ids:
+        raise HTTPException(400, "No product IDs provided")
+    
+    await db.generated_products.update_many(
+        {"id": {"$in": product_ids}},
+        {"$set": {
+            "export_status": "rejected",
+            "reviewed_by_admin": True,
+            "updated_at": iso(now_utc())
+        }}
+    )
+    
+    await log_activity(user["id"], "products_rejected_batch", {"count": len(product_ids)}, "generated_products")
+    return {"ok": True, "count": len(product_ids)}
+
+
 @api.delete("/admin/images/{image_id}")
 async def delete_image(image_id: str, user: dict = Depends(require_role("admin", "manager"))):
     asset = await db.image_assets.find_one({"id": image_id, "is_deleted": {"$ne": True}}, {"_id": 0})
