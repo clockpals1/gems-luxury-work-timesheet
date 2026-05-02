@@ -2216,63 +2216,77 @@ async def create_product_group_from_images(
     user: dict = Depends(require_role("admin", "manager"))
 ):
     """Create a product group from existing images in the library."""
-    if not body.image_ids:
-        raise HTTPException(400, "No image IDs provided")
-    
-    # Validate images exist
-    images = await db.image_assets.find({"id": {"$in": body.image_ids}, "is_deleted": {"$ne": True}}, {"_id": 0}).to_list(length=None)
-    if len(images) != len(body.image_ids):
-        raise HTTPException(400, "Some images not found or deleted")
-    
-    # Get CSV settings for naming convention
-    settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0}) or {}
-    csv_settings = settings.get("csv", {}) or {}
-    naming_convention = csv_settings.get("naming_convention", "{group_name}-{seq:02d}")
-    
-    # Create product group
-    group_id = new_id()
-    group_doc = {
-        "id": group_id,
-        "folder_name": body.folder_name,
-        "category": body.category,
-        "tags": body.tags or [],
-        "image_count": len(images),
-        "uploaded_by": user["id"],
-        "uploaded_by_name": user["name"],
-        "uploaded_at": iso(now_utc()),
-        "base_image_id": None,
-        "additional_image_ids": [],
-        "review_status": "pending",
-        "flags": [],
-        "naming_convention": naming_convention,
-        "image_ids": body.image_ids
-    }
-    
-    # Flag for review if unusual
-    if len(images) < 2 or len(images) > 5:
-        group_doc["flags"].append("unusual_image_count")
-    
-    # Update images with product group metadata
-    for idx, image_id in enumerate(body.image_ids):
-        await db.image_assets.update_one(
-            {"id": image_id},
-            {"$set": {
-                "product_group_id": group_id,
-                "sequence_number": idx + 1,
-                "is_base_image": False,
-                "is_additional_image": True,
-                "review_status": "pending",
-                "approval_status": "pending"
-            }}
-        )
-    
-    # Insert product group
-    await db.product_groups.insert_one(group_doc)
-    group_doc.pop("_id", None)
-    
-    await log_activity(user["id"], "product_group_created_from_images", {"folder_name": body.folder_name, "image_count": len(images)}, "product_group", group_id)
-    
-    return {"product_group": group_doc}
+    try:
+        logger.info("Creating product group from images: image_ids=%s, folder_name=%s", body.image_ids, body.folder_name)
+        
+        if not body.image_ids:
+            raise HTTPException(400, "No image IDs provided")
+        
+        # Validate images exist
+        images = await db.image_assets.find({"id": {"$in": body.image_ids}, "is_deleted": {"$ne": True}}, {"_id": 0}).to_list(length=None)
+        logger.info("Found %d images out of %d requested", len(images), len(body.image_ids))
+        if len(images) != len(body.image_ids):
+            raise HTTPException(400, "Some images not found or deleted")
+        
+        # Get CSV settings for naming convention
+        settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0}) or {}
+        csv_settings = settings.get("csv", {}) or {}
+        naming_convention = csv_settings.get("naming_convention", "{group_name}-{seq:02d}")
+        
+        # Create product group
+        group_id = new_id()
+        logger.info("Creating product group with ID: %s", group_id)
+        group_doc = {
+            "id": group_id,
+            "folder_name": body.folder_name,
+            "category": body.category,
+            "tags": body.tags or [],
+            "image_count": len(images),
+            "uploaded_by": user["id"],
+            "uploaded_by_name": user["name"],
+            "uploaded_at": iso(now_utc()),
+            "base_image_id": None,
+            "additional_image_ids": [],
+            "review_status": "pending",
+            "flags": [],
+            "naming_convention": naming_convention,
+            "image_ids": body.image_ids
+        }
+        
+        # Flag for review if unusual
+        if len(images) < 2 or len(images) > 5:
+            group_doc["flags"].append("unusual_image_count")
+        
+        # Update images with product group metadata
+        logger.info("Updating %d images with product group metadata", len(body.image_ids))
+        for idx, image_id in enumerate(body.image_ids):
+            result = await db.image_assets.update_one(
+                {"id": image_id},
+                {"$set": {
+                    "product_group_id": group_id,
+                    "sequence_number": idx + 1,
+                    "is_base_image": False,
+                    "is_additional_image": True,
+                    "review_status": "pending",
+                    "approval_status": "pending"
+                }}
+            )
+            logger.info("Updated image %s: matched=%d", image_id, result.matched_count)
+        
+        # Insert product group
+        logger.info("Inserting product group into database: %s", group_id)
+        await db.product_groups.insert_one(group_doc)
+        group_doc.pop("_id", None)
+        logger.info("Product group inserted successfully")
+        
+        await log_activity(user["id"], "product_group_created_from_images", {"folder_name": body.folder_name, "image_count": len(images)}, "product_group", group_id)
+        
+        return {"product_group": group_doc}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error creating product group from images: %s", e)
+        raise HTTPException(500, f"Failed to create product group: {str(e)}")
 
 
 @api.post("/admin/images/generate")
