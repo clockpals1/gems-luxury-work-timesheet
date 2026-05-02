@@ -9,10 +9,38 @@ import { Switch } from "../components/ui/switch";
 import { toast } from "sonner";
 
 export default function AdminSettings() {
+  const [loading, setLoading] = useState(true);
   const [s, setS] = useState({ idle_timeout_minutes: 60, warning_seconds: 300, max_break_minutes: 30, currency: "USD", features: {}, ai: {}, csv: {} });
   const [aiSettings, setAiSettings] = useState({ text_provider: "groq", image_provider: "huggingface", openrouter_model: "meta-llama/llama-3-8b-instruct:free", groq_model: "llama3-8b-8192", anthropic_api_key: "", gemini_api_key: "", huggingface_api_key: "", openrouter_api_key: "", groq_api_key: "" });
-  useEffect(() => { api.get("/admin/settings").then(r => setS(prev => ({ ...prev, ...r.data }))); }, []);
-  useEffect(() => { api.get("/admin/settings/ai").then(r => setAiSettings(r.data)).catch(() => {}); }, []);
+  
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        setLoading(true);
+        const r = await api.get("/admin/settings");
+        setS(prev => ({ ...prev, ...r.data }));
+      } catch (e) {
+        console.error("Failed to load settings:", e);
+        toast.error("Failed to load settings");
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadSettings();
+  }, []);
+  
+  useEffect(() => {
+    const loadAiSettings = async () => {
+      try {
+        const r = await api.get("/admin/settings/ai");
+        setAiSettings(r.data);
+      } catch (e) {
+        console.error("Failed to load AI settings:", e);
+        // Don't show toast for this one as it might not exist
+      }
+    };
+    loadAiSettings();
+  }, []);
   const save = async () => {
     try { await api.patch("/admin/settings", s); toast.success("Settings saved"); }
     catch { toast.error("Failed"); }
@@ -22,6 +50,15 @@ export default function AdminSettings() {
     catch { toast.error("Failed"); }
   };
   const feat = (k, v) => setS({ ...s, features: { ...(s.features || {}), [k]: v } });
+  
+  if (loading) {
+    return (
+      <AdminLayout>
+        <div className="text-[#A1B4A8]">Loading settings...</div>
+      </AdminLayout>
+    );
+  }
+  
   return (
     <AdminLayout>
       <div className="mb-6"><div className="label-overline text-[#D4AF37]">Configuration</div><h1 className="font-display text-4xl mt-2">Settings</h1></div>
