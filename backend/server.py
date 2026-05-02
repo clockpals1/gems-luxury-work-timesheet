@@ -597,7 +597,7 @@ async def generate_product(body: GenerateProductIn, user: dict = Depends(get_cur
         "in_stock": csv_settings.get("default_in_stock", True),
         "meta_title": draft["shortTitle"],
         "meta_description": draft["shortDescription"],
-        "meta_keywords": draft.get("tags", []).join(", "),
+        "meta_keywords": ", ".join(draft.get("tags", [])),
         # Image structure for CSV export
         "base_image_id": (image_asset or {}).get("id"),  # Main image for CSV
         "additional_image_ids": [],  # Refined + variations for CSV
