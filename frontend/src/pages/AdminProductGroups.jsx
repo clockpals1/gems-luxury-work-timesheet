@@ -201,12 +201,15 @@ export default function AdminProductGroups() {
                     <div>
                       <div className="text-sm font-semibold">{group.folder_name}</div>
                       <div className="text-xs text-[#A1B4A8]">
-                        {group.image_count} images • {group.category || "No category"} • Uploaded by {group.uploaded_by_name}
+                        {group.image_count} images • {group.category || "Uncategorized"} • Uploaded by {group.uploaded_by_name}
                       </div>
                       <div className="text-xs text-[#A1B4A8]">{new Date(group.uploaded_at).toLocaleString()}</div>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
+                    {group.category && (
+                      <Badge className="bg-[#097969]/20 text-[#2A9D8F]">{group.category}</Badge>
+                    )}
                     {group.flags && group.flags.length > 0 && (
                       <Badge className="bg-[#E63946]/20 text-[#E63946] flex items-center gap-1">
                         <AlertTriangle className="w-3 h-3" />
