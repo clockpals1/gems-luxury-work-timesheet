@@ -204,6 +204,16 @@ export default function AdminSettings() {
                 </select>
               </div>
             </div>
+            <div className="space-y-2">
+              <Label className="label-overline">Naming Convention</Label>
+              <Input 
+                value={s.csv?.naming_convention || "{group_name}-{seq:02d}"} 
+                onChange={(e) => setS({ ...s, csv: { ...(s.csv || {}), naming_convention: e.target.value } })}
+                placeholder="{group_name}-{seq:02d}"
+                className="bg-[#132018] border-[#21362A]"
+              />
+              <div className="text-xs text-[#A1B4A8]">Variables: {group_name}, {seq}, {date}</div>
+            </div>
           </CardContent>
         </Card>
       </div>

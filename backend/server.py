@@ -5,9 +5,11 @@ import asyncio
 import os
 import uuid
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional, Any, List
+import io
 
 import bcrypt
 import jwt
@@ -1734,8 +1736,282 @@ class GenerateImageIn(BaseModel):
     category: Optional[str] = None
 
 
+class FolderUploadIn(BaseModel):
+    category: Optional[str] = None
+    tags: Optional[List[str]] = []
+
+
+class ProductGroupReviewIn(BaseModel):
+    base_image_id: str
+    additional_image_ids: List[str]
+
+
+class ProductGroupSplitIn(BaseModel):
+    image_ids: List[str]
+    new_group_name: Optional[str] = None
+    category: Optional[str] = None
+
+
 class RegenerateImageIn(BaseModel):
     instruction: Optional[str] = None
+
+
+# ---------- Product Groups (Folder Ingestion) ----------
+@api.post("/admin/product-groups/upload-folder")
+async def upload_product_group(
+    files: List[UploadFile] = File(...),
+    folder_name: str = Form(...),
+    category: Optional[str] = Form(None),
+    tags: Optional[str] = Form(None),
+    user: dict = Depends(require_role("admin", "manager"))
+):
+    """Upload a folder of images as a product group. One folder = one product."""
+    if not files:
+        raise HTTPException(400, "No files provided")
+    
+    # Get CSV settings for naming convention
+    settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0}) or {}
+    csv_settings = settings.get("csv", {}) or {}
+    naming_convention = csv_settings.get("naming_convention", "{group_name}-{seq:02d}")
+    
+    # Validate image count
+    if len(files) < 2:
+        raise HTTPException(400, "Folder must contain at least 2 images")
+    if len(files) > 10:
+        raise HTTPException(400, "Folder contains too many images (max 10)")
+    
+    # Check for unsupported files
+    supported_types = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
+    unsupported = [f.filename for f in files if f.content_type not in supported_types]
+    if unsupported:
+        raise HTTPException(400, f"Unsupported file types: {', '.join(unsupported)}")
+    
+    # Create product group
+    group_id = new_id()
+    group_doc = {
+        "id": group_id,
+        "folder_name": folder_name,
+        "category": category,
+        "tags": [t.strip() for t in tags.split(",") if t.strip()] if tags else [],
+        "image_count": len(files),
+        "uploaded_by": user["id"],
+        "uploaded_by_name": user["name"],
+        "uploaded_at": iso(now_utc()),
+        "base_image_id": None,
+        "additional_image_ids": [],
+        "review_status": "pending",  # pending, reviewed, approved, needs_review
+        "flags": [],
+        "naming_convention": naming_convention
+    }
+    
+    # Flag for review if unusual
+    if len(files) < 2 or len(files) > 5:
+        group_doc["flags"].append("unusual_image_count")
+    
+    # Upload images with auto-renaming
+    image_assets = []
+    for idx, file in enumerate(files):
+        try:
+            data = await file.read()
+            if not data:
+                continue
+            
+            # Auto-rename using naming convention
+            seq = idx + 1
+            normalized_filename = naming_convention.format(
+                group_name=folder_name,
+                seq=seq,
+                date=datetime.now().strftime("%Y%m%d")
+            )
+            
+            # Add extension
+            ext = Path(file.filename).suffix or ".png"
+            normalized_filename += ext
+            
+            # Upload to storage
+            path = storage.build_path(user["id"], f"product-groups/{group_id}/{normalized_filename}")
+            result = await asyncio.to_thread(storage.put_object, path, data, file.content_type or "image/png")
+            
+            # Create image asset with metadata
+            image_doc = {
+                "id": new_id(),
+                "storage_path": result["path"],
+                "filename": normalized_filename,
+                "original_filename": file.filename,
+                "content_type": file.content_type,
+                "size": result.get("size", len(data)),
+                "category": category,
+                "tags": [t.strip() for t in tags.split(",") if t.strip()] if tags else [],
+                "status": "available",
+                "assigned_count": 0,
+                "is_deleted": False,
+                "uploaded_by": user["id"],
+                "uploaded_at": iso(now_utc()),
+                # Product group metadata
+                "product_group_id": group_id,
+                "sequence_number": seq,
+                "is_base_image": False,
+                "is_additional_image": True,
+                "review_status": "pending",
+                "approval_status": "pending"
+            }
+            
+            await db.image_assets.insert_one(image_doc)
+            image_doc.pop("_id", None)
+            image_assets.append(image_doc)
+            
+        except Exception as e:
+            logger.exception("Failed to upload image %s: %s", file.filename, e)
+            group_doc["flags"].append(f"upload_error_{file.filename}")
+    
+    # Update group with image IDs
+    group_doc["image_ids"] = [img["id"] for img in image_assets]
+    group_doc["image_count"] = len(image_assets)
+    
+    # Insert product group
+    await db.product_groups.insert_one(group_doc)
+    group_doc.pop("_id", None)
+    
+    await log_activity(user["id"], "product_group_uploaded", {"folder_name": folder_name, "image_count": len(image_assets)}, "product_group", group_id)
+    
+    return {"product_group": group_doc, "images": image_assets}
+
+
+@api.get("/admin/product-groups")
+async def list_product_groups(
+    user: dict = Depends(require_role("admin", "manager")),
+    review_status: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200)
+):
+    """List product groups with optional filtering."""
+    query = {}
+    if review_status:
+        query["review_status"] = review_status
+    
+    groups = await db.product_groups.find(query, {"_id": 0}).sort("uploaded_at", -1).to_list(limit)
+    return groups
+
+
+@api.get("/admin/product-groups/{group_id}")
+async def get_product_group(group_id: str, user: dict = Depends(require_role("admin", "manager"))):
+    """Get product group details with all images."""
+    group = await db.product_groups.find_one({"id": group_id}, {"_id": 0})
+    if not group:
+        raise HTTPException(404, "Product group not found")
+    
+    # Get images in the group
+    image_ids = group.get("image_ids", [])
+    images = []
+    if image_ids:
+        images = await db.image_assets.find({"id": {"$in": image_ids}}, {"_id": 0}).to_list(length=None)
+        # Sort by sequence number
+        images.sort(key=lambda x: x.get("sequence_number", 0))
+    
+    return {"product_group": group, "images": images}
+
+
+@api.patch("/admin/product-groups/{group_id}/review")
+async def review_product_group(
+    group_id: str,
+    body: ProductGroupReviewIn,
+    user: dict = Depends(require_role("admin", "manager"))
+):
+    """Review product group: set base image and additional images."""
+    group = await db.product_groups.find_one({"id": group_id}, {"_id": 0})
+    if not group:
+        raise HTTPException(404, "Product group not found")
+    
+    # Validate image IDs belong to this group
+    group_image_ids = set(group.get("image_ids", []))
+    if body.base_image_id not in group_image_ids:
+        raise HTTPException(400, "Base image ID not in this group")
+    
+    for img_id in body.additional_image_ids:
+        if img_id not in group_image_ids:
+            raise HTTPException(400, f"Additional image ID {img_id} not in this group")
+    
+    # Update product group
+    updates = {
+        "base_image_id": body.base_image_id,
+        "additional_image_ids": body.additional_image_ids,
+        "review_status": "reviewed",
+        "reviewed_by": user["id"],
+        "reviewed_at": iso(now_utc())
+    }
+    
+    await db.product_groups.update_one({"id": group_id}, {"$set": updates})
+    
+    # Update image assets to mark base and additional
+    await db.image_assets.update_many(
+        {"id": body.base_image_id},
+        {"$set": {"is_base_image": True, "is_additional_image": False}}
+    )
+    
+    await db.image_assets.update_many(
+        {"id": {"$in": body.additional_image_ids}},
+        {"$set": {"is_base_image": False, "is_additional_image": True}}
+    )
+    
+    await log_activity(user["id"], "product_group_reviewed", {"group_id": group_id, "base_image": body.base_image_id}, "product_group", group_id)
+    
+    return {"ok": True}
+
+
+@api.post("/admin/product-groups/{group_id}/split")
+async def split_product_group(
+    group_id: str,
+    body: ProductGroupSplitIn,
+    user: dict = Depends(require_role("admin", "manager"))
+):
+    """Split images from a product group into a new group."""
+    group = await db.product_groups.find_one({"id": group_id}, {"_id": 0})
+    if not group:
+        raise HTTPException(404, "Product group not found")
+    
+    # Validate image IDs belong to this group
+    group_image_ids = set(group.get("image_ids", []))
+    for img_id in body.image_ids:
+        if img_id not in group_image_ids:
+            raise HTTPException(400, f"Image ID {img_id} not in this group")
+    
+    # Create new product group
+    new_group_id = new_id()
+    new_group_doc = {
+        "id": new_group_id,
+        "folder_name": body.new_group_name or f"{group['folder_name']}-split",
+        "category": body.category or group.get("category"),
+        "tags": group.get("tags", []),
+        "image_count": len(body.image_ids),
+        "uploaded_by": user["id"],
+        "uploaded_by_name": user["name"],
+        "uploaded_at": iso(now_utc()),
+        "base_image_id": None,
+        "additional_image_ids": [],
+        "review_status": "pending",
+        "flags": ["split_from_original"],
+        "naming_convention": group.get("naming_convention"),
+        "split_from_group_id": group_id
+    }
+    
+    await db.product_groups.insert_one(new_group_doc)
+    new_group_doc.pop("_id", None)
+    
+    # Update images to new group
+    await db.image_assets.update_many(
+        {"id": {"$in": body.image_ids}},
+        {"$set": {"product_group_id": new_group_id}}
+    )
+    
+    # Update original group
+    remaining_ids = list(group_image_ids - set(body.image_ids))
+    await db.product_groups.update_one(
+        {"id": group_id},
+        {"$set": {"image_ids": remaining_ids, "image_count": len(remaining_ids), "flags": group.get("flags", []) + ["split"]}}
+    )
+    
+    await log_activity(user["id"], "product_group_split", {"from_group": group_id, "to_group": new_group_id, "image_count": len(body.image_ids)}, "product_group", group_id)
+    
+    return {"ok": True, "new_group_id": new_group_id}
 
 
 @api.post("/admin/images/generate")

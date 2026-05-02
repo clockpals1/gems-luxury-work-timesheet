@@ -11,6 +11,8 @@ import AdminDashboard from "./pages/AdminDashboard";
 import AdminCSVQueue from "./pages/AdminCSVQueue";
 import AdminProductDetail from "./pages/AdminProductDetail";
 import AdminWorkers from "./pages/AdminWorkers";
+import AdminProductGroups from "./pages/AdminProductGroups";
+import AdminProductGroupDetail from "./pages/AdminProductGroupDetail";
 import AdminUsers from "./pages/AdminUsers";
 import AdminProducts from "./pages/AdminProducts";
 import AdminNaming from "./pages/AdminNaming";
@@ -40,6 +42,8 @@ function Router() {
       <Route path="/admin/csv-queue" element={<Protected roles={["admin","manager"]}><AdminCSVQueue /></Protected>} />
       <Route path="/admin/products/:productId" element={<Protected roles={["admin","manager"]}><AdminProductDetail /></Protected>} />
       <Route path="/admin/workers" element={<Protected roles={["admin","manager"]}><AdminWorkers /></Protected>} />
+      <Route path="/admin/product-groups" element={<Protected roles={["admin","manager"]}><AdminProductGroups /></Protected>} />
+      <Route path="/admin/product-groups/:groupId" element={<Protected roles={["admin","manager"]}><AdminProductGroupDetail /></Protected>} />
       <Route path="/admin/users" element={<Protected roles={["admin","manager"]}><AdminUsers /></Protected>} />
       <Route path="/admin/products" element={<Protected roles={["admin","manager"]}><AdminProducts /></Protected>} />
       <Route path="/admin/naming" element={<Protected roles={["admin","manager"]}><AdminNaming /></Protected>} />
