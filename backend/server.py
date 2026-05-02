@@ -1979,8 +1979,22 @@ async def list_product_groups(
             query["review_status"] = review_status
         
         logger.info("Querying product_groups with query: %s", query)
+        
+        # Try a direct SQL query to see if there are any documents
+        try:
+            async with _acquire_conn() as c:
+                count = await c.fetchval("SELECT COUNT(*) FROM gl_product_groups")
+                logger.info("Direct SQL count from gl_product_groups: %d", count)
+                
+                # If there are documents, fetch one to see its structure
+                if count > 0:
+                    sample = await c.fetchrow("SELECT doc FROM gl_product_groups LIMIT 1")
+                    logger.info("Sample document: %s", sample["doc"] if sample else None)
+        except Exception as e:
+            logger.exception("Error with direct SQL query: %s", e)
+        
         groups = await db.product_groups.find(query, {"_id": 0}).sort("uploaded_at", -1).to_list(limit)
-        logger.info("Found %d product groups", len(groups))
+        logger.info("Found %d product groups via ORM", len(groups))
         return groups
     except Exception as e:
         logger.exception("Error listing product groups: %s", e)
