@@ -1799,6 +1799,8 @@ async def upload_product_group(
 ):
     """Upload a folder of images as a product group. One folder = one product."""
     try:
+        logger.info("Starting product group upload: folder_name=%s, file_count=%d", folder_name, len(files))
+        
         if not files:
             raise HTTPException(400, "No files provided")
         
@@ -1806,6 +1808,7 @@ async def upload_product_group(
         settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0}) or {}
         csv_settings = settings.get("csv", {}) or {}
         naming_convention = csv_settings.get("naming_convention", "{group_name}-{seq:02d}")
+        logger.info("Using naming convention: %s", naming_convention)
         
         # Validate image count
         if len(files) < 2:
@@ -1821,6 +1824,7 @@ async def upload_product_group(
         
         # Create product group
         group_id = new_id()
+        logger.info("Creating product group with ID: %s", group_id)
         group_doc = {
             "id": group_id,
             "folder_name": folder_name,
@@ -1845,17 +1849,23 @@ async def upload_product_group(
         image_assets = []
         for idx, file in enumerate(files):
             try:
+                logger.info("Processing file %d/%d: %s", idx + 1, len(files), file.filename)
                 data = await file.read()
                 if not data:
+                    logger.warning("Skipping empty file: %s", file.filename)
                     continue
                 
                 # Auto-rename using naming convention
                 seq = idx + 1
-                normalized_filename = naming_convention.format(
-                    group_name=folder_name,
-                    seq=seq,
-                    date=datetime.now().strftime("%Y%m%d")
-                )
+                try:
+                    normalized_filename = naming_convention.format(
+                        group_name=folder_name,
+                        seq=seq,
+                        date=datetime.now().strftime("%Y%m%d")
+                    )
+                except KeyError as e:
+                    logger.error("Invalid naming convention format: %s, error: %s", naming_convention, e)
+                    raise HTTPException(400, f"Invalid naming convention format: {e}")
                 
                 # Add extension
                 ext = Path(file.filename).suffix or ".png"
@@ -1863,6 +1873,7 @@ async def upload_product_group(
                 
                 # Upload to storage
                 path = storage.build_path(user["id"], f"product-groups/{group_id}/{normalized_filename}")
+                logger.info("Uploading to storage path: %s", path)
                 result = await asyncio.to_thread(storage.put_object, path, data, file.content_type or "image/png")
                 
                 # Create image asset with metadata
@@ -1892,6 +1903,7 @@ async def upload_product_group(
                 await db.image_assets.insert_one(image_doc)
                 image_doc.pop("_id", None)
                 image_assets.append(image_doc)
+                logger.info("Successfully uploaded image: %s", normalized_filename)
                 
             except Exception as e:
                 logger.exception("Failed to upload image %s: %s", file.filename, e)
@@ -1902,11 +1914,13 @@ async def upload_product_group(
         group_doc["image_count"] = len(image_assets)
         
         # Insert product group
+        logger.info("Inserting product group into database")
         await db.product_groups.insert_one(group_doc)
         group_doc.pop("_id", None)
         
         await log_activity(user["id"], "product_group_uploaded", {"folder_name": folder_name, "image_count": len(image_assets)}, "product_group", group_id)
         
+        logger.info("Product group upload completed successfully")
         return {"product_group": group_doc, "images": image_assets}
     except HTTPException:
         raise
