@@ -1320,6 +1320,30 @@ async def update_product_images(product_id: str, body: dict, user: dict = Depend
     return {"ok": True}
 
 
+@api.get("/products/{product_id}/detail")
+async def get_product_detail(product_id: str, user: dict = Depends(get_current_user)):
+    """Get detailed product information including all images and worker details."""
+    product = await db.generated_products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Product not found")
+    
+    # Get image assets
+    image_ids = [product.get("base_image_id"), product.get("source_image_id"), product.get("refined_image_id")]
+    image_ids.extend(product.get("additional_image_ids", []))
+    image_ids.extend(product.get("variation_image_ids", []))
+    image_ids = [id for id in image_ids if id]
+    
+    images = {}
+    if image_ids:
+        image_assets = await db.image_assets.find({"id": {"$in": image_ids}}, {"_id": 0}).to_list(length=None)
+        images = {img["id"]: img for img in image_assets}
+    
+    return {
+        "product": product,
+        "images": images
+    }
+
+
 @api.delete("/admin/images/{image_id}")
 async def delete_image(image_id: str, user: dict = Depends(require_role("admin", "manager"))):
     asset = await db.image_assets.find_one({"id": image_id, "is_deleted": {"$ne": True}}, {"_id": 0})
