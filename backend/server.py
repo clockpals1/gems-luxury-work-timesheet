@@ -536,6 +536,11 @@ async def generate_product(body: GenerateProductIn, user: dict = Depends(get_cur
 
     naming_families = await db.naming_families.find({}, {"_id": 0}).to_list(100)
     pricing = await db.pricing_rules.find_one({"id": "global"}, {"_id": 0}) or {"min_price": 40, "max_price": 150, "currency": "USD"}
+    
+    # Get CSV export settings
+    settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0}) or {}
+    csv_settings = settings.get("csv", {}) or {}
+    default_brand = csv_settings.get("default_brand", "Gems & Luxury")
 
     # pick image if not provided
     image_asset_id = body.image_asset_id
@@ -580,7 +585,7 @@ async def generate_product(body: GenerateProductIn, user: dict = Depends(get_cur
         # CSV export fields
         "active": True,
         "is_active": True,
-        "brand": pricing.get("brand", "Gems & Luxury"),
+        "brand": default_brand,
         "meta_title": draft["shortTitle"],
         "meta_description": draft["shortDescription"],
         "meta_keywords": draft.get("tags", []).join(", "),

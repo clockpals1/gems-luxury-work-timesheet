@@ -9,7 +9,7 @@ import { Switch } from "../components/ui/switch";
 import { toast } from "sonner";
 
 export default function AdminSettings() {
-  const [s, setS] = useState({ idle_timeout_minutes: 60, warning_seconds: 300, max_break_minutes: 30, currency: "USD", features: {}, ai: {} });
+  const [s, setS] = useState({ idle_timeout_minutes: 60, warning_seconds: 300, max_break_minutes: 30, currency: "USD", features: {}, ai: {}, csv: {} });
   const [aiSettings, setAiSettings] = useState({ text_provider: "groq", image_provider: "huggingface", openrouter_model: "meta-llama/llama-3-8b-instruct:free", groq_model: "llama3-8b-8192", anthropic_api_key: "", gemini_api_key: "", huggingface_api_key: "", openrouter_api_key: "", groq_api_key: "" });
   useEffect(() => { api.get("/admin/settings").then(r => setS(prev => ({ ...prev, ...r.data }))); }, []);
   useEffect(() => { api.get("/admin/settings/ai").then(r => setAiSettings(r.data)).catch(() => {}); }, []);
@@ -122,6 +122,42 @@ export default function AdminSettings() {
                 />
                 <div className="text-xs text-[#A1B4A8]">Free models: meta-llama/llama-3-8b-instruct:free, google/gemma-7b-it:free</div>
               </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="bg-[#0C140F] border-[#21362A] rounded-sm md:col-span-2">
+          <CardHeader><CardTitle className="font-display text-xl">CSV Export Settings</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="label-overline">Default Brand</Label>
+                <Input 
+                  value={s.csv?.default_brand || "Gems & Luxury"} 
+                  onChange={(e) => setS({ ...s, csv: { ...(s.csv || {}), default_brand: e.target.value } })}
+                  className="bg-[#132018] border-[#21362A]"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="label-overline">Default Stock Status</Label>
+                <select 
+                  value={s.csv?.default_stock_status || "instock"} 
+                  onChange={(e) => setS({ ...s, csv: { ...(s.csv || {}), default_stock_status: e.target.value } })}
+                  className="w-full bg-[#132018] border-[#21362A] rounded p-2 text-[#A1B4A8]"
+                >
+                  <option value="instock">In Stock</option>
+                  <option value="outofstock">Out of Stock</option>
+                  <option value="onbackorder">On Backorder</option>
+                </select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="label-overline">Default Stock Quantity</Label>
+              <Input 
+                type="number" 
+                value={s.csv?.default_stock_quantity || 100} 
+                onChange={(e) => setS({ ...s, csv: { ...(s.csv || {}), default_stock_quantity: Number(e.target.value) } })}
+                className="bg-[#132018] border-[#21362A]"
+              />
             </div>
           </CardContent>
         </Card>

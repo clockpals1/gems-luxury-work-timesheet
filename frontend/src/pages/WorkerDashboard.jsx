@@ -24,6 +24,8 @@ export default function WorkerDashboard() {
   const [generating, setGenerating] = useState(false);
   const [latest, setLatest] = useState(null);
   const [processing, setProcessing] = useState({});
+  const [selectedProducts, setSelectedProducts] = useState(new Set());
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async () => {
     const [s, p, c] = await Promise.all([
@@ -133,6 +135,45 @@ export default function WorkerDashboard() {
     } finally {
       setProcessing((p) => ({ ...p, complete: false }));
     }
+  };
+
+  const handleExportCSV = async () => {
+    setExporting(true);
+    try {
+      const r = await api.get("/products/export/csv", { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", "products_export.csv");
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      toast.success("CSV exported successfully");
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const toggleProductSelection = (productId) => {
+    const newSelected = new Set(selectedProducts);
+    if (newSelected.has(productId)) {
+      newSelected.delete(productId);
+    } else {
+      newSelected.add(productId);
+    }
+    setSelectedProducts(newSelected);
+  };
+
+  const getExportStatusColor = (status) => {
+    const colors = {
+      pending: "bg-gray-500/20 text-gray-300",
+      approved: "bg-green-500/20 text-green-300",
+      exported: "bg-blue-500/20 text-blue-300"
+    };
+    return colors[status] || "bg-gray-500/20 text-gray-300";
   };
 
   const onBreak = !!status?.open_break;
@@ -255,20 +296,34 @@ export default function WorkerDashboard() {
             </CardContent>
           </Card>
           <Card className="bg-[#0C140F] border-[#21362A] rounded-sm">
-            <CardHeader><CardTitle className="font-display text-2xl">Recent products</CardTitle></CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle className="font-display text-2xl">Product Queue</CardTitle>
+              <div className="flex gap-2">
+                <Button onClick={handleExportCSV} disabled={exporting} size="sm" className="bg-[#D4AF37] hover:bg-[#F0C84A] text-[#050A07]">
+                  {exporting ? "Exporting..." : "Export CSV"}
+                </Button>
+              </div>
+            </CardHeader>
             <CardContent className="space-y-3" data-testid="recent-products">
               {products.length === 0 && <div className="text-sm text-[#A1B4A8]">Nothing yet — generate your first product.</div>}
-              {products.slice(0, 8).map((p) => (
+              {products.map((p) => (
                 <div 
                   key={p.id} 
                   onClick={() => navigate(`/products/${p.id}`)}
                   className="flex items-center gap-3 p-2 rounded-sm border border-transparent hover:border-[#21362A] cursor-pointer"
                 >
+                  <input
+                    type="checkbox"
+                    checked={selectedProducts.has(p.id)}
+                    onChange={(e) => { e.stopPropagation(); toggleProductSelection(p.id); }}
+                    className="w-4 h-4"
+                  />
                   <Package className="w-4 h-4 text-[#D4AF37]"/>
                   <div className="flex-1 min-w-0">
                     <div className="truncate text-sm">{p.name}</div>
                     <div className="text-xs text-[#A1B4A8] truncate">{p.category}</div>
                   </div>
+                  <Badge className={getExportStatusColor(p.export_status || "pending")}>{p.export_status || "pending"}</Badge>
                   <div className="font-display text-[#D4AF37]">${p.final_price}</div>
                 </div>
               ))}
