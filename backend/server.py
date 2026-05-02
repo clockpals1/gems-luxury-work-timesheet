@@ -1143,6 +1143,21 @@ async def export_products_csv(user: dict = Depends(get_current_user)):
     if not products:
         raise HTTPException(404, "No approved products to export")
     
+    # Validate required fields
+    errors = []
+    for p in products:
+        if not p.get("name"):
+            errors.append(f"Product {p.get('id', 'unknown')}: Missing Name")
+        if p.get("final_price") is None or p.get("final_price") == "":
+            errors.append(f"Product {p.get('id', 'unknown')}: Missing Price")
+        if p.get("active") is None:
+            errors.append(f"Product {p.get('id', 'unknown')}: Missing Active status")
+        if p.get("is_active") is None:
+            errors.append(f"Product {p.get('id', 'unknown')}: Missing is_active status")
+    
+    if errors:
+        raise HTTPException(400, f"Validation errors: {', '.join(errors)}")
+    
     # Build CSV headers
     headers = [
         "Name",
@@ -1222,6 +1237,17 @@ async def export_products_csv(user: dict = Depends(get_current_user)):
         {"id": {"$in": product_ids}},
         {"$set": {"export_status": "exported", "exported_at": iso(now_utc())}}
     )
+    
+    # Log export
+    await db.export_logs.insert_one({
+        "id": new_id(),
+        "exported_by_user_id": user["id"],
+        "exported_by_name": user["name"],
+        "product_ids": product_ids,
+        "product_count": len(products),
+        "exported_at": iso(now_utc()),
+        "status": "completed"
+    })
     
     await log_activity(user["id"], "products_exported_csv", {"count": len(products)}, "generated_products")
     
@@ -1389,6 +1415,124 @@ async def reject_product(product_id: str, user: dict = Depends(require_role("adm
     
     await log_activity(user["id"], "product_rejected", {"product_id": product_id}, "generated_products", product_id)
     return {"ok": True}
+
+
+@api.get("/admin/export-logs")
+async def get_export_logs(user: dict = Depends(require_role("admin"))):
+    """Get export history logs."""
+    logs = await db.export_logs.find({}, {"_id": 0}).sort("exported_at", -1).to_list(length=50)
+    return logs
+
+
+@api.get("/products/export/preview")
+async def preview_export_csv(user: dict = Depends(require_role("admin"))):
+    """Preview CSV export without marking products as exported."""
+    # Get products to export - filter by export_status
+    products = await db.generated_products.find(
+        {"export_status": "approved"},
+        {"_id": 0}
+    ).to_list(length=None)
+    
+    if not products:
+        raise HTTPException(404, "No approved products to export")
+    
+    # Validate required fields
+    errors = []
+    for p in products:
+        if not p.get("name"):
+            errors.append(f"Product {p.get('id', 'unknown')}: Missing Name")
+        if p.get("final_price") is None or p.get("final_price") == "":
+            errors.append(f"Product {p.get('id', 'unknown')}: Missing Price")
+        if p.get("active") is None:
+            errors.append(f"Product {p.get('id', 'unknown')}: Missing Active status")
+        if p.get("is_active") is None:
+            errors.append(f"Product {p.get('id', 'unknown')}: Missing is_active status")
+    
+    if errors:
+        raise HTTPException(400, f"Validation errors: {', '.join(errors)}")
+    
+    # Build CSV headers
+    headers = [
+        "Name",
+        "SKU",
+        "description",
+        "short_description",
+        "Active",
+        "is_active",
+        "Brand",
+        "categories",
+        "Tax Class",
+        "Tags",
+        "Price",
+        "Special Price",
+        "Special Price Type",
+        "Special Price Start",
+        "Special Price End",
+        "Manage Stock",
+        "Quantity",
+        "In Stock",
+        "Base Image",
+        "Additional Images",
+        "meta_title",
+        "meta_description",
+        "meta_keywords"
+    ]
+    
+    # Build CSV rows (preview only first 10)
+    import csv
+    import io
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    
+    preview_products = products[:10]
+    for p in preview_products:
+        # Get image URLs
+        base_image_url = ""
+        if p.get("base_image_id"):
+            base_image_url = f"{get_base_url()}/images/{p['base_image_id']}"
+        
+        additional_image_urls = []
+        for img_id in p.get("additional_image_ids", []):
+            additional_image_urls.append(f"{get_base_url()}/images/{img_id}")
+        additional_images = ",".join(additional_image_urls)
+        
+        row = [
+            p.get("name", ""),
+            p.get("sku", ""),
+            p.get("full_description", ""),
+            p.get("short_description", ""),
+            "yes" if p.get("active", True) else "no",
+            "yes" if p.get("is_active", True) else "no",
+            p.get("brand", "Gems & Luxury"),
+            p.get("category", ""),
+            p.get("tax_class", "Taxable Goods"),
+            ",".join(p.get("tags", [])),
+            p.get("final_price", ""),
+            p.get("special_price", ""),
+            p.get("special_price_type", ""),
+            p.get("special_price_start", ""),
+            p.get("special_price_end", ""),
+            "yes" if p.get("manage_stock", True) else "no",
+            p.get("quantity", 100),
+            "yes" if p.get("in_stock", True) else "no",
+            base_image_url,
+            additional_images,
+            p.get("meta_title", ""),
+            p.get("meta_description", ""),
+            p.get("meta_keywords", "")
+        ]
+        writer.writerow(row)
+    
+    csv_content = output.getvalue()
+    output.close()
+    
+    return {
+        "preview": csv_content,
+        "total_products": len(products),
+        "preview_products": len(preview_products)
+    }
 
 
 @api.get("/admin/workers/productivity")
