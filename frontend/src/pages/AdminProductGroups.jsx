@@ -36,9 +36,12 @@ export default function AdminProductGroups() {
       const params = new URLSearchParams();
       if (filters.review_status !== "all") params.append("review_status", filters.review_status);
       
+      console.log("Loading product groups with params:", params.toString());
       const r = await api.get(`/admin/product-groups?${params.toString()}`);
+      console.log("Product groups response:", r.data);
       setGroups(r.data);
     } catch (e) {
+      console.error("Failed to load product groups:", e);
       toast.error("Failed to load product groups");
     } finally {
       setLoading(false);
