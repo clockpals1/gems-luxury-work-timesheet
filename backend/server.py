@@ -1772,9 +1772,16 @@ class ProductGroupReviewIn(BaseModel):
 
 
 class ProductGroupSplitIn(BaseModel):
-    image_ids: List[str]
+    image_ids: list[str]
     new_group_name: Optional[str] = None
     category: Optional[str] = None
+
+
+class CreateProductGroupFromImagesIn(BaseModel):
+    image_ids: list[str]
+    folder_name: str
+    category: Optional[str] = None
+    tags: list[str] = []
 
 
 class RegenerateImageIn(BaseModel):
@@ -1913,8 +1920,12 @@ async def list_product_groups(
     if review_status:
         query["review_status"] = review_status
     
-    groups = await db.product_groups.find(query, {"_id": 0}).sort("uploaded_at", -1).to_list(limit)
-    return groups
+    try:
+        groups = await db.product_groups.find(query, {"_id": 0}).sort("uploaded_at", -1).to_list(limit)
+        return groups
+    except Exception as e:
+        logger.error("Error listing product groups: %s", e)
+        return []
 
 
 @api.get("/admin/product-groups/{group_id}")
@@ -2138,6 +2149,71 @@ async def convert_product_group_to_product(
     await log_activity(user["id"], "product_group_converted", {"group_id": group_id, "product_id": product_doc["id"]}, "product_group", group_id)
     
     return {"product": product_doc}
+
+
+@api.post("/admin/product-groups/create-from-images")
+async def create_product_group_from_images(
+    body: CreateProductGroupFromImagesIn,
+    user: dict = Depends(require_role("admin", "manager"))
+):
+    """Create a product group from existing images in the library."""
+    if not body.image_ids:
+        raise HTTPException(400, "No image IDs provided")
+    
+    # Validate images exist
+    images = await db.image_assets.find({"id": {"$in": body.image_ids}, "is_deleted": {"$ne": True}}, {"_id": 0}).to_list(length=None)
+    if len(images) != len(body.image_ids):
+        raise HTTPException(400, "Some images not found or deleted")
+    
+    # Get CSV settings for naming convention
+    settings = await db.admin_settings.find_one({"id": "global"}, {"_id": 0}) or {}
+    csv_settings = settings.get("csv", {}) or {}
+    naming_convention = csv_settings.get("naming_convention", "{group_name}-{seq:02d}")
+    
+    # Create product group
+    group_id = new_id()
+    group_doc = {
+        "id": group_id,
+        "folder_name": body.folder_name,
+        "category": body.category,
+        "tags": body.tags or [],
+        "image_count": len(images),
+        "uploaded_by": user["id"],
+        "uploaded_by_name": user["name"],
+        "uploaded_at": iso(now_utc()),
+        "base_image_id": None,
+        "additional_image_ids": [],
+        "review_status": "pending",
+        "flags": [],
+        "naming_convention": naming_convention,
+        "image_ids": body.image_ids
+    }
+    
+    # Flag for review if unusual
+    if len(images) < 2 or len(images) > 5:
+        group_doc["flags"].append("unusual_image_count")
+    
+    # Update images with product group metadata
+    for idx, image_id in enumerate(body.image_ids):
+        await db.image_assets.update_one(
+            {"id": image_id},
+            {"$set": {
+                "product_group_id": group_id,
+                "sequence_number": idx + 1,
+                "is_base_image": False,
+                "is_additional_image": True,
+                "review_status": "pending",
+                "approval_status": "pending"
+            }}
+        )
+    
+    # Insert product group
+    await db.product_groups.insert_one(group_doc)
+    group_doc.pop("_id", None)
+    
+    await log_activity(user["id"], "product_group_created_from_images", {"folder_name": body.folder_name, "image_count": len(images)}, "product_group", group_id)
+    
+    return {"product_group": group_doc}
 
 
 @api.post("/admin/images/generate")
