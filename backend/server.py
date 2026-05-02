@@ -608,8 +608,8 @@ async def generate_product(body: GenerateProductIn, user: dict = Depends(get_cur
         "variation_image_2_id": None,
         "export_status": "pending",  # pending, approved, exported
         "reviewed_by_admin": False,
-        "session_id": status.get("session_id") if status else None,
-        "punch_status_at_generation": status.get("status") if status else None,
+        "session_id": att.get("session_id") if att else None,
+        "punch_status_at_generation": att.get("status") if att else None,
         # Legacy fields
         "image_asset_id": (image_asset or {}).get("id"),
         "image_variation_ids": [],
