@@ -7,7 +7,7 @@ import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { toast } from "sonner";
-import { Upload, Layers } from "lucide-react";
+import { Upload, Layers, Trash2 } from "lucide-react";
 import ImageVariationsDialog from "../components/ImageVariationsDialog";
 
 export default function AdminImages() {
@@ -38,10 +38,25 @@ export default function AdminImages() {
 
   const setStatus = async (id, status) => { await api.patch(`/admin/images/${id}`, { status }); load(); };
 
+  const handleClearAll = async () => {
+    if (!confirm("Are you sure you want to delete ALL images from the database? This action cannot be undone.")) return;
+    if (!confirm("This will delete ALL image assets and variations. Type 'DELETE' to confirm.")) return;
+    try {
+      const r = await api.delete("/admin/images/clear-all");
+      toast.success(`Cleared ${r.data.assets_deleted} image assets and ${r.data.variations_deleted} variations`);
+      load();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to clear images");
+    }
+  };
+
   return (
     <AdminLayout>
       <div className="flex items-end justify-between mb-6">
         <div><div className="label-overline text-[#D4AF37]">Library</div><h1 className="font-display text-4xl mt-2">Images</h1></div>
+        <Button onClick={handleClearAll} variant="outline" className="border-[#E63946] text-[#E63946] hover:bg-[#E63946]/10">
+          <Trash2 className="w-4 h-4 mr-2"/>Clear All Images
+        </Button>
       </div>
       <Card className="bg-[#0C140F] border-[#21362A] rounded-sm mb-6">
         <CardHeader><CardTitle className="font-display text-xl">Upload (multiple supported)</CardTitle></CardHeader>
