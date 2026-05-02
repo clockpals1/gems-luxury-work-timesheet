@@ -22,10 +22,21 @@ export default function AdminCSVQueue() {
     image_status: "all"
   });
   const [exporting, setExporting] = useState(false);
+  const [exportLogs, setExportLogs] = useState([]);
 
   useEffect(() => {
     loadProducts();
+    loadExportLogs();
   }, [filters]);
+
+  const loadExportLogs = async () => {
+    try {
+      const r = await api.get("/admin/export-logs");
+      setExportLogs(r.data);
+    } catch (e) {
+      // Export logs might not exist yet, ignore error
+    }
+  };
 
   const loadProducts = async () => {
     setLoading(true);
@@ -57,8 +68,23 @@ export default function AdminCSVQueue() {
       link.remove();
       toast.success("CSV exported successfully");
       loadProducts();
+      loadExportLogs();
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handlePreviewCSV = async () => {
+    setExporting(true);
+    try {
+      const r = await api.get("/products/export/preview");
+      const previewWindow = window.open("", "_blank");
+      previewWindow.document.write(`<pre>${r.data.preview}</pre>`);
+      toast.success(`Preview loaded (${r.data.preview_products} of ${r.data.total_products} products)`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Preview failed");
     } finally {
       setExporting(false);
     }
@@ -199,6 +225,9 @@ export default function AdminCSVQueue() {
           <Button onClick={handleRejectSelected} disabled={selected.size === 0} variant="outline" className="border-[#21362A] text-[#A1B4A8]">
             <X className="w-4 h-4 mr-2"/>Reject Selected ({selected.size})
           </Button>
+          <Button onClick={handlePreviewCSV} disabled={exporting} variant="outline" className="border-[#21362A] text-[#A1B4A8]">
+            Preview CSV
+          </Button>
           <Button onClick={handleExportCSV} disabled={exporting} className="bg-[#D4AF37] hover:bg-[#F0C84A] text-[#050A07]">
             <Download className="w-4 h-4 mr-2"/>{exporting ? "Exporting..." : "Export CSV"}
           </Button>
@@ -244,6 +273,28 @@ export default function AdminCSVQueue() {
                 </tbody>
               </table>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Export Logs */}
+        <Card className="bg-[#0C140F] border-[#21362A] rounded-sm">
+          <CardHeader><CardTitle className="font-display text-xl">Export History</CardTitle></CardHeader>
+          <CardContent>
+            {exportLogs.length === 0 ? (
+              <div className="text-sm text-[#A1B4A8]">No exports yet.</div>
+            ) : (
+              <div className="space-y-2">
+                {exportLogs.map((log) => (
+                  <div key={log.id} className="flex items-center justify-between p-3 border border-[#21362A] rounded-sm">
+                    <div>
+                      <div className="text-sm">{log.exported_by_name}</div>
+                      <div className="text-xs text-[#A1B4A8]">{log.product_count} products • {new Date(log.exported_at).toLocaleString()}</div>
+                    </div>
+                    <Badge className="bg-[#097969]/20 text-[#2A9D8F]">{log.status}</Badge>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
