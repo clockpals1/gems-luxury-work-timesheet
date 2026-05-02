@@ -1344,6 +1344,53 @@ async def get_product_detail(product_id: str, user: dict = Depends(get_current_u
     }
 
 
+@api.patch("/products/{product_id}")
+async def update_product(product_id: str, body: dict, user: dict = Depends(require_role("admin", "manager"))):
+    """Update product fields."""
+    product = await db.generated_products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Product not found")
+    
+    # Allowed fields to update
+    allowed_fields = [
+        "name", "sku", "short_description", "full_description", "category",
+        "tags", "final_price", "brand", "tax_class", "active", "is_active",
+        "special_price", "special_price_type", "special_price_start", "special_price_end",
+        "manage_stock", "quantity", "in_stock", "meta_title", "meta_description", "meta_keywords"
+    ]
+    
+    updates = {k: v for k, v in body.items() if k in allowed_fields}
+    if updates:
+        updates["updated_at"] = iso(now_utc())
+        await db.generated_products.update_one(
+            {"id": product_id},
+            {"$set": updates}
+        )
+    
+    await log_activity(user["id"], "product_updated", {"product_id": product_id}, "generated_products", product_id)
+    return {"ok": True}
+
+
+@api.post("/products/{product_id}/reject")
+async def reject_product(product_id: str, user: dict = Depends(require_role("admin"))):
+    """Admin rejects a product from export."""
+    product = await db.generated_products.find_one({"id": product_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Product not found")
+    
+    await db.generated_products.update_one(
+        {"id": product_id},
+        {"$set": {
+            "export_status": "rejected",
+            "reviewed_by_admin": True,
+            "updated_at": iso(now_utc())
+        }}
+    )
+    
+    await log_activity(user["id"], "product_rejected", {"product_id": product_id}, "generated_products", product_id)
+    return {"ok": True}
+
+
 @api.delete("/admin/images/{image_id}")
 async def delete_image(image_id: str, user: dict = Depends(require_role("admin", "manager"))):
     asset = await db.image_assets.find_one({"id": image_id, "is_deleted": {"$ne": True}}, {"_id": 0})

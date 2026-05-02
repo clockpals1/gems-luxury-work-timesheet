@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { AdminLayout } from "../components/Layout";
 import { Button } from "../components/ui/button";
@@ -10,6 +11,7 @@ import { toast } from "sonner";
 import { Download, Check, X, Filter } from "lucide-react";
 
 export default function AdminCSVQueue() {
+  const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(new Set());
@@ -225,8 +227,8 @@ export default function AdminCSVQueue() {
                 </thead>
                 <tbody>
                   {products.map((p) => (
-                    <tr key={p.id} className="border-b border-[#21362A]/50 hover:bg-[#132018]/50">
-                      <td className="p-3">
+                    <tr key={p.id} className="border-b border-[#21362A]/50 hover:bg-[#132018]/50 cursor-pointer" onClick={(e) => { if (e.target.type !== 'checkbox') navigate(`/admin/products/${p.id}`); }}>
+                      <td className="p-3" onClick={(e) => e.stopPropagation()}>
                         <input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} className="w-4 h-4"/>
                       </td>
                       <td className="p-3 text-sm">{p.name}</td>
