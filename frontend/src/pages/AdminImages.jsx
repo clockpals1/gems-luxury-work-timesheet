@@ -42,11 +42,14 @@ export default function AdminImages() {
     if (!confirm("Are you sure you want to delete ALL images from the database? This action cannot be undone.")) return;
     if (!confirm("This will delete ALL image assets and variations. Type 'DELETE' to confirm.")) return;
     try {
+      console.log("Calling clear-all endpoint...");
       const r = await api.delete("/admin/images/clear-all");
+      console.log("Clear response:", r.data);
       toast.success(`Cleared ${r.data.assets_deleted} image assets and ${r.data.variations_deleted} variations`);
       load();
     } catch (err) {
-      toast.error(err?.response?.data?.detail || "Failed to clear images");
+      console.error("Clear error:", err);
+      toast.error(err?.response?.data?.detail || err?.message || "Failed to clear images");
     }
   };
 
