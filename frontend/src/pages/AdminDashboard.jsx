@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { AdminLayout } from "../components/Layout";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { Users, Coffee, Timer, Package, Image as ImageIcon } from "lucide-react";
+import { Users, Coffee, Timer, Package, Image as ImageIcon, Download, ChevronRight } from "lucide-react";
 
 const stateStyle = {
   active: "bg-[#097969]/20 text-[#2A9D8F] border-[#097969]/40",
@@ -12,6 +14,7 @@ const stateStyle = {
 };
 
 export default function AdminDashboard() {
+  const navigate = useNavigate();
   const [stats, setStats] = useState(null);
   const [liveUsers, setLiveUsers] = useState([]);
   const [recent, setRecent] = useState([]);
@@ -54,6 +57,41 @@ export default function AdminDashboard() {
           <Kpi label="Total products" value={stats?.total_products ?? "—"} icon={Package} data-testid="kpi-total-products"/>
           <Kpi label="Images available" value={stats?.available_images ?? "—"} icon={ImageIcon} data-testid="kpi-images"/>
           <Kpi label="Active users" value={stats?.users_active ?? "—"} icon={Users} data-testid="kpi-active-users"/>
+        </section>
+
+        <section>
+          <Card className="bg-[#0C140F] border-[#21362A] rounded-sm">
+            <CardHeader><CardTitle className="font-display text-2xl">Quick Actions</CardTitle></CardHeader>
+            <CardContent className="grid md:grid-cols-3 gap-4">
+              <Button onClick={() => navigate("/admin/csv-queue")} className="bg-[#D4AF37] hover:bg-[#F0C84A] text-[#050A07] h-auto py-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-left">
+                    <div className="font-semibold">CSV Queue</div>
+                    <div className="text-xs opacity-80">Review and export products</div>
+                  </div>
+                  <ChevronRight className="w-5 h-5"/>
+                </div>
+              </Button>
+              <Button onClick={() => navigate("/admin/settings")} variant="outline" className="border-[#21362A] text-[#A1B4A8] h-auto py-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-left">
+                    <div className="font-semibold">Settings</div>
+                    <div className="text-xs opacity-80">Configure export defaults</div>
+                  </div>
+                  <ChevronRight className="w-5 h-5"/>
+                </div>
+              </Button>
+              <Button onClick={() => navigate("/admin/activity")} variant="outline" className="border-[#21362A] text-[#A1B4A8] h-auto py-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-left">
+                    <div className="font-semibold">Activity Logs</div>
+                    <div className="text-xs opacity-80">View system activity</div>
+                  </div>
+                  <ChevronRight className="w-5 h-5"/>
+                </div>
+              </Button>
+            </CardContent>
+          </Card>
         </section>
 
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
