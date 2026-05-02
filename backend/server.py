@@ -1614,7 +1614,7 @@ async def delete_image(image_id: str, user: dict = Depends(require_role("admin",
 
 
 @api.delete("/admin/images/clear-all")
-async def clear_all_images(user: dict = Depends(require_role("admin"))):
+async def clear_all_images(user: dict = Depends(require_role("admin", "manager"))):
     """Delete all image assets and variations from the database (admin only)."""
     # Delete all image assets
     assets_result = await db.image_assets.delete_many({})
