@@ -159,6 +159,51 @@ export default function AdminSettings() {
                 className="bg-[#132018] border-[#21362A]"
               />
             </div>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="label-overline">Default Tax Class</Label>
+                <Input 
+                  value={s.csv?.default_tax_class || "Taxable Goods"} 
+                  onChange={(e) => setS({ ...s, csv: { ...(s.csv || {}), default_tax_class: e.target.value } })}
+                  className="bg-[#132018] border-[#21362A]"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="label-overline">Default Manage Stock</Label>
+                <select 
+                  value={s.csv?.default_manage_stock ? "true" : "false"} 
+                  onChange={(e) => setS({ ...s, csv: { ...(s.csv || {}), default_manage_stock: e.target.value === "true" } })}
+                  className="w-full bg-[#132018] border-[#21362A] rounded p-2 text-[#A1B4A8]"
+                >
+                  <option value="true">Yes</option>
+                  <option value="false">No</option>
+                </select>
+              </div>
+            </div>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="label-overline">Default In Stock</Label>
+                <select 
+                  value={s.csv?.default_in_stock ? "true" : "false"} 
+                  onChange={(e) => setS({ ...s, csv: { ...(s.csv || {}), default_in_stock: e.target.value === "true" } })}
+                  className="w-full bg-[#132018] border-[#21362A] rounded p-2 text-[#A1B4A8]"
+                >
+                  <option value="true">Yes</option>
+                  <option value="false">No</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label className="label-overline">Default Active Status</Label>
+                <select 
+                  value={s.csv?.default_active ? "true" : "false"} 
+                  onChange={(e) => setS({ ...s, csv: { ...(s.csv || {}), default_active: e.target.value === "true" } })}
+                  className="w-full bg-[#132018] border-[#21362A] rounded p-2 text-[#A1B4A8]"
+                >
+                  <option value="true">Yes</option>
+                  <option value="false">No</option>
+                </select>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
